@@ -1,0 +1,151 @@
+# TGFileBot
+
+TGFileBot 是一个基于 Go 的 Telegram 文件浏览、直链解析和自动下载工具。它支持 Bot 和多个 UserBot 账号协作，提供频道搜索、文件流式访问、自动下载、强制入群和发布构建等能力。
+
+## 功能
+
+- Telegram 频道媒体搜索和直链解析
+- 文件流式下载，支持 Range 请求
+- 自动下载频道文件
+- 多 UserBot 账号支持
+- 频道未加入时可自动尝试加入
+- 下载完成后进行文件大小和 MD5 校验
+- 支持 HTTP 服务与可选 Bot 交互
+- GitHub Actions 手动发布 Linux / Windows 版本
+
+## 目录结构
+
+- `main.go`：程序入口
+- `config.go`：配置解析
+- `client.go`：Telegram 客户端和登录逻辑
+- `download.go`：自动下载逻辑
+- `stream.go`：流式下载逻辑
+- `http.go`：HTTP 接口
+- `util.go`：辅助函数
+- `files/config.yaml.example`：配置示例
+
+## 快速开始
+
+1. 复制示例配置文件。
+
+```powershell
+copy files\config.yaml.example files\config.yaml
+```
+
+2. 修改 `files/config.yaml`，填入 Telegram `id`、`hash`、`userBots`、`botToken` 等信息。
+
+3. 启动程序。
+
+```powershell
+go run . -files files
+```
+
+如果你只想运行已经编译好的程序，可以直接启动生成的二进制。
+
+```powershell
+.\tgfilebot.exe -files files
+```
+
+## 启动参数
+
+- `-files`：配置目录，默认是 `files`
+- `-log`：日志文件路径
+- `-version` / `-v`：输出版本号并退出
+
+## 配置说明
+
+主要配置文件是 `files/config.yaml`。下面是常见字段说明：
+
+- `id`：Telegram API ID
+- `hash`：Telegram API Hash
+- `botToken`：Bot Token
+- `site`：站点域名，用于链接生成
+- `port`：HTTP 服务端口
+- `password`：访问接口时使用的密码
+- `debug`：是否开启调试日志
+- `workers`：下载和流式读取的基础并发数
+- `maxSize`：缓存阈值
+- `userID`：管理员用户 ID
+- `userBots`：多个 UserBot 账号配置
+- `download.enabled`：是否启用自动下载
+- `download.outputDir`：下载输出目录
+- `download.globalTypes`：默认允许下载的媒体类型
+- `download.concurrent`：同时处理的频道数量
+- `download.fileWorkers`：单文件内部并发分片数
+- `download.forceJoin`：未加入频道时是否自动尝试加入
+- `download.channels`：自动下载的频道列表
+
+### 频道下载配置示例
+
+```yaml
+download:
+  enabled: true
+  outputDir: downloads
+  concurrent: 2
+  fileWorkers: 4
+  forceJoin: true
+  channels:
+    - id: -1001234567890
+      fromMessageID: 1
+      user: user1
+      join: t.me/your_channel
+      types:
+        - video
+        - photo
+```
+
+### UserBot 示例
+
+```yaml
+userBots:
+  - name: user1
+    phone: "+8613800000000"
+  - name: user2
+    phone: "+8613900000000"
+```
+
+## 构建
+
+由于当前仓库环境可能没有完整的 VCS 信息，建议构建时显式关闭 VCS stamping。
+
+```powershell
+go build -buildvcs=false
+```
+
+如果你想生成指定平台版本，可以手动设置环境变量：
+
+```powershell
+$env:GOOS = "linux"
+$env:GOARCH = "amd64"
+$env:CGO_ENABLED = "0"
+go build -buildvcs=false -trimpath -ldflags "-s -w" -o dist/tgfilebot-linux-amd64 .
+```
+
+```powershell
+$env:GOOS = "windows"
+$env:GOARCH = "amd64"
+$env:CGO_ENABLED = "0"
+go build -buildvcs=false -trimpath -ldflags "-s -w" -o dist/tgfilebot-windows-amd64.exe .
+```
+
+## GitHub Actions 手动发布
+
+仓库已添加手动触发的发布工作流：`.github/workflows/release.yml`。
+
+它会：
+
+- 在 GitHub Actions 中手动触发
+- 使用当前提交的 `github.sha` 作为 release tag 和名称
+- 同时构建 Linux amd64 和 Windows amd64 版本
+- 自动上传构建产物到 GitHub Release
+
+## 运行提示
+
+- 首次登录 UserBot 时可能需要手动输入验证码或 2FA 密码
+- 如果启用了自动下载，程序启动后会自动扫描配置中的频道
+- 如果账号未加入频道且开启了 `download.forceJoin`，程序会尝试自动加入
+- 下载完成后会校验文件大小，并在可用时校验 MD5
+
+## 许可证
+
+本项目使用 `LICENSE` 中声明的许可证。

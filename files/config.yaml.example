@@ -1,0 +1,43 @@
+port: 8080
+id: 0
+hash: ""
+site: ""
+botToken: ""
+debug: false
+password: ""
+userID: 0
+workers: 1
+maxSize: 33554432
+adminIDs: []
+whiteIDs: []
+channels: []
+userBots:
+  - name: user1
+    phone: "+8613800000000"
+    # password: "2FA密码(可选)"
+    # userID: 123456789
+    # dc: 4
+  - name: user2
+    phone: "+8613900000000"
+    # password: "2FA密码(可选)"
+download:
+  enabled: true
+  outputDir: downloads
+  # 如果路径为相对路径, 它相对于运行二进制的当前工作目录 (cwd)
+  globalTypes:
+    - video
+    - photo
+  # 并发下载的频道数量限制, 0 表示不限制 (建议根据机器网络/磁盘能力设置为 2-8)
+  concurrent: 2
+  fileWorkers: 4
+  channels:
+    - id: -1001234567890
+      fromMessageID: 1
+      user: user1
+      types:
+        - video
+    - id: -1009876543210
+      fromMessageID: 100
+      user: user2
+      types:
+        - photo
