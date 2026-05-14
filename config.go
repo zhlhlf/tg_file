@@ -52,6 +52,14 @@ type Download struct {
 	FileWorkers int               `yaml:"fileWorkers,omitempty"` // 每个文件内部的并发分片数, 0 表示使用全局 workers
 	CacheItems  int               `yaml:"cacheItems,omitempty"`  // 媒体缓存最大条目数, 默认 100
 	ForceJoin   bool              `yaml:"forceJoin,omitempty"`   // 当账号未加入频道时尝试自动加入 (全局开关)
+	Rclone      Rclone            `yaml:"rclone,omitempty"`      // rclone 远端存在性检查配置
+}
+
+type Rclone struct {
+	Enabled      bool   `yaml:"enabled"`
+	ConfigFile   string `yaml:"configFile,omitempty"`
+	Remote       string `yaml:"remote,omitempty"`
+	TransferMode string `yaml:"transferMode,omitempty"` // move 或 copy, 默认 move
 }
 
 type DownloadChannel struct {

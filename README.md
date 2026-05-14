@@ -73,6 +73,10 @@ go run . -files files
 - `download.concurrent`：同时处理的频道数量
 - `download.fileWorkers`：单文件内部并发分片数
 - `download.forceJoin`：未加入频道时是否自动尝试加入
+- `download.rclone.enabled`：是否启用 rclone 远端存在性检查和上传 move
+- `download.rclone.configFile`：指定 rclone 配置文件路径，等价于命令行 `--config`
+- `download.rclone.remote`：rclone 远端根路径，例如 `myremote:downloads`
+- `download.rclone.transferMode`：上传方式，支持 `move` 或 `copy`，默认 `move`
 - `download.channels`：自动下载的频道列表
 
 ### 频道下载配置示例
@@ -84,6 +88,11 @@ download:
   concurrent: 2
   fileWorkers: 4
   forceJoin: true
+  rclone:
+    enabled: true
+    configFile: C:/Users/Administrator/.config/rclone/rclone.conf
+    transferMode: move
+    remote: myremote:downloads
   channels:
     - id: -1001234567890
       fromMessageID: 1
@@ -144,6 +153,7 @@ go build -buildvcs=false -trimpath -ldflags "-s -w" -o dist/tgfilebot-windows-am
 - 首次登录 UserBot 时可能需要手动输入验证码或 2FA 密码
 - 如果启用了自动下载，程序启动后会自动扫描配置中的频道
 - 如果账号未加入频道且开启了 `download.forceJoin`，程序会尝试自动加入
+- 如果开启了 `download.rclone.enabled`，程序会先检查 rclone 远端是否已存在同名文件，存在则直接跳过；远端路径会自动带上本地 `outputDir` 的目录名，然后按 `download.rclone.transferMode` 使用 rclone move 或 copy
 - 下载完成后会校验文件大小，并在可用时校验 MD5
 
 ## 许可证

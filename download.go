@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -97,7 +98,6 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 				accountName = availableAccounts[assignedIdx]
 				client = infos.UserClients[accountName]
 				rrIdx++
-				log.Printf("轮询分配: cid=%d -> user=%s (rrIdx=%d)", task.ID, accountName, assignedIdx)
 			}
 		}
 
@@ -106,7 +106,6 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 			continue
 		}
 
-		log.Printf("频道开始分配下载: cid=%d user=%s", task.ID, accountName)
 		if err := infos.downloadChannelRange(ctx, client, outputRoot, task, sem, &wgFiles, accountName); err != nil {
 			log.Printf("频道下载失败: cid=%d err=%v", task.ID, err)
 		}
@@ -253,9 +252,19 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 					log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, m.ID, acct, fmt.Errorf("未找到可用客户端"))
 					return
 				}
-				if err := infos.downloadMessageToFile(ctx, c, outputRoot, m, acct); err != nil {
-					log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, m.ID, acct, err)
+				var err error
+				const maxAttempts = 3
+				for attempt := 1; attempt <= maxAttempts; attempt++ {
+					err = infos.downloadMessageToFile(ctx, c, outputRoot, m, acct)
+					if err == nil {
+						return
+					}
+					if attempt < maxAttempts {
+						log.Printf("下载消息失败，准备重试: cid=%d mid=%d user=%s attempt=%d/%d err=%v", task.ID, m.ID, acct, attempt, maxAttempts, err)
+						time.Sleep(time.Duration(attempt) * 2 * time.Second)
+					}
 				}
+				log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, m.ID, acct, err)
 			}(msg, fileClient, fileAccount)
 		}
 	}
@@ -322,24 +331,80 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 		msgTime = time.Unix(int64(msg.Message.Date), 0)
 	}
 
+	rawText := extractMessageContent(msg)
+	if strings.TrimSpace(rawText) == "" {
+		if groupCaption, err := infos.getMediaGroupCaption(ctx, client, msg); err != nil {
+			log.Printf("消息组 caption 获取失败: cid=%d mid=%d err=%v", msg.ChatID(), msg.ID, err)
+		} else if strings.TrimSpace(groupCaption) != "" {
+			rawText = groupCaption
+			debugf("消息组 caption 命中: cid=%d mid=%d caption=%q", msg.ChatID(), msg.ID, rawText)
+		}
+	}
+	debugf("原始消息内容: cid=%d mid=%d caption=%q fileName=%q", msg.ChatID(), msg.ID, rawText, func() string {
+		if msg.File != nil {
+			return msg.File.Name
+		}
+		return ""
+	}())
+
 	channelName := strings.TrimSpace(msg.Channel.Title)
 	if channelName == "" {
 		channelName = strconv.FormatInt(msg.ChatID(), 10)
 	}
 	channelName = sanitizeFileName(channelName)
 
-	content := strings.TrimSpace(msg.Text())
-	if content == "" {
-		content = strings.TrimSpace(msg.File.Name)
-	}
-	if content == "" {
-		content = "no-title"
-	}
+	content := strings.TrimSpace(rawText)
+	hasContent := content != ""
 	content = sanitizeFileName(content)
 
-	dir := filepath.Join(outputRoot, channelName, fmt.Sprintf("%04d-%02d", msgTime.Year(), msgTime.Month()))
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
+	ext := determineFileExtension(msg)
+	dir := filepath.Join(outputRoot, channelName, fmt.Sprintf("%04d_%02d", msgTime.Year(), msgTime.Month()))
+	fileName := fmt.Sprintf("%d%s", msg.ID, ext)
+	if hasContent && content != "" {
+		fileName = fmt.Sprintf("%d - %s%s", msg.ID, content, ext)
+	}
+	finalPath := filepath.Join(dir, fileName)
+	displayLocalPath := func(path string) string {
+		cleanPath := filepath.Clean(path)
+		cleanRoot := filepath.Clean(outputRoot)
+		if relPath, relErr := filepath.Rel(cleanRoot, cleanPath); relErr == nil && relPath != "." && !strings.HasPrefix(relPath, "..") {
+			return relPath
+		}
+		rootWithSep := cleanRoot + string(os.PathSeparator)
+		if strings.HasPrefix(cleanPath, rootWithSep) {
+			return strings.TrimPrefix(cleanPath, rootWithSep)
+		}
+		return filepath.Base(cleanPath)
+	}
+
+	if infos != nil && infos.Conf != nil && infos.Conf.Download.Rclone.Enabled {
+		if remotePath, remoteErr := infos.rcloneRemotePath(outputRoot, finalPath); remoteErr == nil {
+			debugf("检查远端文件是否存在: path=%s remote=%s", displayLocalPath(finalPath), remotePath)
+		} else {
+			debugf("检查文件是否存在: path=%s", displayLocalPath(finalPath))
+		}
+		if exists, err := infos.rcloneFileExists(ctx, outputRoot, finalPath); err != nil {
+			log.Printf("rclone 文件检查失败: path=%s err=%v", displayLocalPath(finalPath), err)
+		} else if exists {
+			log.Printf("rclone 文件存在, 跳过下载: path=%s", displayLocalPath(finalPath))
+			return nil
+		}
+	}
+	if _, err := os.Stat(finalPath); err == nil {
+		if infos != nil && infos.Conf != nil && infos.Conf.Download.Rclone.Enabled {
+			remotePath, rcloneErr := infos.rcloneRemotePath(outputRoot, finalPath)
+			if rcloneErr != nil {
+				return rcloneErr
+			}
+			mode := infos.rcloneTransferMode()
+			log.Printf("本地文件已存在，执行 rclone 传输: user=%s path=%s", accountName, displayLocalPath(finalPath))
+			if rcloneErr := infos.rcloneTransferFile(ctx, finalPath, remotePath, mode); rcloneErr != nil {
+				return rcloneErr
+			}
+			log.Printf("下载完成: %s", displayLocalPath(finalPath))
+			log.Printf("rclone %s 完成: %s", mode, displayLocalPath(finalPath))
+		}
+		return nil
 	}
 
 	// 临时目录用于先写入下载完成的临时文件，之后验证通过再移动到最终位置
@@ -349,19 +414,23 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 		return err
 	}
 
-	ext := determineFileExtension(msg)
-	finalPath := filepath.Join(dir, fmt.Sprintf("%d - %s%s", msg.ID, content, ext))
-	if _, err := os.Stat(finalPath); err == nil {
-		return nil
-	}
-
 	// 记录开始下载日志
-	tmpPath := filepath.Join(tmpDir, fmt.Sprintf("%d - %s%s.tmp", msg.ID, content, ext))
-	log.Printf("开始下载文件: user=%s final=%s", accountName, finalPath)
+	tmpFileName := fmt.Sprintf("%d%s.tmp", msg.ID, ext)
+	if hasContent && content != "" {
+		tmpFileName = fmt.Sprintf("%d - %s%s.tmp", msg.ID, content, ext)
+	}
+	tmpPath := filepath.Join(tmpDir, tmpFileName)
+	log.Printf("开始下载文件: user=%s final=%s", accountName, displayLocalPath(finalPath))
 	f, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
+	success := false
+	defer func() {
+		if !success {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 	// 在后续逻辑中会关闭 f
 
 	fileCtx, cancel := context.WithCancel(ctx)
@@ -448,9 +517,55 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 
 				// (不再对临时文件与最终文件做 MD5 比对)
 
-				// 移动到最终位置
+				// 对临时文件计算 MD5，用于与远端（如果存在）或临时文件做校验
+				finalMD5, err := fileMD5(tmpPath)
+				if err != nil {
+					_ = os.Remove(tmpPath)
+					return fmt.Errorf("复核下载文件 MD5 失败: %w", err)
+				}
+
+				// 尝试从消息元数据获取远端提供的 MD5（字段名可能不同，使用反射尝试多种常见名称）
+				expected := getRemoteFileMD5(msg)
+				if expected != "" {
+					if finalMD5 != expected {
+						_ = os.Remove(tmpPath)
+						return fmt.Errorf("下载文件 MD5 与远端不匹配: expected=%s final=%s", expected, finalMD5)
+					}
+					log.Printf("下载文件 MD5 校验通过(对比远端): user=%s md5=%s", accountName, finalMD5)
+				}
+
+				if infos != nil && infos.Conf != nil && infos.Conf.Download.Rclone.Enabled {
+					remotePath, err := infos.rcloneRemotePath(outputRoot, finalPath)
+					if err != nil {
+						return err
+					}
+					mode := infos.rcloneTransferMode()
+					if err := os.MkdirAll(dir, 0755); err != nil {
+						return err
+					}
+					if err := os.Rename(tmpPath, finalPath); err != nil {
+						if os.IsExist(err) {
+							_ = os.Remove(finalPath)
+							if err := os.Rename(tmpPath, finalPath); err != nil {
+								return err
+							}
+						} else {
+							return err
+						}
+					}
+					log.Printf("下载完成: %s", displayLocalPath(finalPath))
+					if err := infos.rcloneTransferFile(ctx, finalPath, remotePath, mode); err != nil {
+						return err
+					}
+					log.Printf("rclone %s 完成: %s", mode, displayLocalPath(finalPath))
+					success = true
+					return nil
+				}
+
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					return err
+				}
 				if err := os.Rename(tmpPath, finalPath); err != nil {
-					// 若目标存在则尝试删除目标后重命名
 					if os.IsExist(err) {
 						_ = os.Remove(finalPath)
 						if err := os.Rename(tmpPath, finalPath); err != nil {
@@ -461,27 +576,8 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 					}
 				}
 
-				// 对最终文件计算 MD5，用于与远端（如果存在）或临时文件做校验
-				finalMD5, err := fileMD5(finalPath)
-				if err != nil {
-					_ = os.Remove(finalPath)
-					return fmt.Errorf("复核下载文件 MD5 失败: %w", err)
-				}
-
-				// 尝试从消息元数据获取远端提供的 MD5（字段名可能不同，使用反射尝试多种常见名称）
-				expected := getRemoteFileMD5(msg)
-				if expected != "" {
-					if finalMD5 != expected {
-						_ = os.Remove(finalPath)
-						return fmt.Errorf("下载文件 MD5 与远端不匹配: expected=%s final=%s", expected, finalMD5)
-					}
-					log.Printf("下载文件 MD5 校验通过(对比远端): user=%s md5=%s", accountName, finalMD5)
-				} else {
-					// 若没有远端 MD5，则已按大小校验，记录完成并输出最终 MD5 供诊断
-					log.Printf("下载完成(未提供远端 MD5): user=%s md5=%s", accountName, finalMD5)
-				}
-
-				log.Printf("下载完成: user=%s path=%s", accountName, finalPath)
+				log.Printf("下载完成: %s", displayLocalPath(finalPath))
+				success = true
 				return nil
 			}
 			timer.Reset(30 * time.Second)
@@ -490,6 +586,140 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 			return fmt.Errorf("下载超时: cid=%d mid=%d", msg.ChatID(), msg.ID)
 		}
 	}
+}
+
+func (infos *Infos) rcloneRemotePath(outputRoot, finalPath string) (string, error) {
+	if infos == nil || infos.Conf == nil {
+		return "", nil
+	}
+	rcloneConf := infos.Conf.Download.Rclone
+	remoteRoot := strings.TrimSpace(rcloneConf.Remote)
+	if remoteRoot == "" {
+		return "", fmt.Errorf("rclone 已启用但未配置 remote")
+	}
+	relPath, err := filepath.Rel(outputRoot, finalPath)
+	if err != nil {
+		return "", err
+	}
+	return joinRclonePath(remoteRoot, filepath.ToSlash(relPath)), nil
+}
+
+func (infos *Infos) rcloneFileExists(ctx context.Context, outputRoot, finalPath string) (bool, error) {
+	if infos == nil || infos.Conf == nil {
+		return false, nil
+	}
+	rcloneConf := infos.Conf.Download.Rclone
+	if !rcloneConf.Enabled {
+		return false, nil
+	}
+	remoteRoot := strings.TrimSpace(rcloneConf.Remote)
+	if remoteRoot == "" {
+		return false, fmt.Errorf("rclone 已启用但未配置 remote")
+	}
+	relPath, err := filepath.Rel(outputRoot, finalPath)
+	if err != nil {
+		return false, err
+	}
+	remotePath := joinRclonePath(remoteRoot, filepath.ToSlash(relPath))
+	args := infos.rcloneArgs("lsjson", "--stat", remotePath)
+	cmd := exec.CommandContext(ctx, "rclone", args...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		text := strings.TrimSpace(string(output))
+		if strings.Contains(strings.ToLower(text), "directory not found") {
+			return false, nil
+		}
+		if text != "" {
+			return false, fmt.Errorf("%w: %s", err, text)
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (infos *Infos) rcloneMoveFile(ctx context.Context, localPath, remotePath string) error {
+	if infos == nil || infos.Conf == nil {
+		return nil
+	}
+	rcloneConf := infos.Conf.Download.Rclone
+	if !rcloneConf.Enabled {
+		return nil
+	}
+	args := infos.rcloneArgs("moveto", localPath, remotePath)
+	cmd := exec.CommandContext(ctx, "rclone", args...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		text := strings.TrimSpace(string(output))
+		if text != "" {
+			return fmt.Errorf("%w: %s", err, text)
+		}
+		return err
+	}
+	return nil
+}
+
+func (infos *Infos) rcloneTransferFile(ctx context.Context, localPath, remotePath, mode string) error {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "copy":
+		return infos.rcloneCopyFile(ctx, localPath, remotePath)
+	default:
+		return infos.rcloneMoveFile(ctx, localPath, remotePath)
+	}
+}
+
+func (infos *Infos) rcloneCopyFile(ctx context.Context, localPath, remotePath string) error {
+	if infos == nil || infos.Conf == nil {
+		return nil
+	}
+	rcloneConf := infos.Conf.Download.Rclone
+	if !rcloneConf.Enabled {
+		return nil
+	}
+	args := infos.rcloneArgs("copyto", localPath, remotePath)
+	cmd := exec.CommandContext(ctx, "rclone", args...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		text := strings.TrimSpace(string(output))
+		if text != "" {
+			return fmt.Errorf("%w: %s", err, text)
+		}
+		return err
+	}
+	return nil
+}
+
+func (infos *Infos) rcloneArgs(extra ...string) []string {
+	args := make([]string, 0, len(extra)+2)
+	rcloneConf := infos.Conf.Download.Rclone
+	configFile := strings.TrimSpace(rcloneConf.ConfigFile)
+	if configFile != "" {
+		args = append(args, "--config", configFile)
+	}
+	args = append(args, extra...)
+	return args
+}
+
+func (infos *Infos) rcloneTransferMode() string {
+	if infos == nil || infos.Conf == nil {
+		return "move"
+	}
+	mode := strings.ToLower(strings.TrimSpace(infos.Conf.Download.Rclone.TransferMode))
+	if mode == "copy" {
+		return "copy"
+	}
+	return "move"
+}
+
+func joinRclonePath(base, rel string) string {
+	base = strings.TrimSpace(base)
+	rel = strings.TrimLeft(strings.TrimSpace(rel), "/")
+	if base == "" {
+		return rel
+	}
+	if rel == "" {
+		return base
+	}
+	if strings.HasSuffix(base, ":") {
+		return base + rel
+	}
+	return strings.TrimRight(base, "/") + "/" + rel
 }
 
 func detectMessageType(msg telegram.NewMessage) (string, bool) {
@@ -530,17 +760,84 @@ func normalizeTypeFilter(globalTypes, localTypes []string) (map[string]struct{},
 	return set, false
 }
 
+func extractMessageContent(msg telegram.NewMessage) string {
+	if msg.Message == nil {
+		return strings.TrimSpace(msg.Text())
+	}
+	for _, fieldName := range []string{"Caption"} {
+		debugf("尝试提取消息内容: cid=%d mid=%d 字段=%s", msg.ChatID(), msg.ID, fieldName)
+		if text := strings.TrimSpace(readStringField(msg.Message, fieldName)); text != "" {
+			return text
+		}
+	}
+	return strings.TrimSpace(msg.Text())
+}
+
+func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.Client, msg telegram.NewMessage) (string, error) {
+	if client == nil || msg.Message == nil || msg.Message.GroupedID == 0 {
+		return "", nil
+	}
+
+	ids := make([]int32, 0, 11)
+	seen := make(map[int32]struct{}, 11)
+	for offset := int32(-5); offset <= 5; offset++ {
+		id := msg.ID + offset
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+
+	ms, err := client.GetMessages(msg.ChatID(), &telegram.SearchOption{IDs: ids})
+	if err != nil {
+		return "", err
+	}
+	for _, groupMsg := range ms {
+		if groupMsg.Message == nil || groupMsg.Message.GroupedID != msg.Message.GroupedID {
+			continue
+		}
+		caption := strings.TrimSpace(extractMessageContent(groupMsg))
+		if caption != "" {
+			return caption, nil
+		}
+	}
+	return "", nil
+}
+
+func readStringField(src any, fieldName string) string {
+	v := reflect.ValueOf(src)
+	if !v.IsValid() {
+		return ""
+	}
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return ""
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return ""
+	}
+	f := v.FieldByName(fieldName)
+	if !f.IsValid() || f.Kind() != reflect.String {
+		return ""
+	}
+	return f.String()
+}
+
 func sanitizeFileName(src string) string {
-	src = strings.TrimSpace(src)
-	src = strings.ReplaceAll(src, "\n", " ")
-	src = fileNameSanitizer.ReplaceAllString(src, "_")
-	src = strings.Trim(src, " .")
-	src = strings.Join(strings.Fields(src), " ")
+	// src = strings.TrimSpace(src)
+	src = strings.ReplaceAll(src, "\n", "_")
+	src = strings.ReplaceAll(src, "\r", "_")
 	if src == "" {
 		return "untitled"
-	}
-	if len([]rune(src)) > 80 {
-		src = string([]rune(src)[:80])
 	}
 	return src
 }

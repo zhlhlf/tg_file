@@ -7,3 +7,5 @@ files/dl_files
 files/sessions
 files/tmp
 files/config.yaml
+
+rclone.conf

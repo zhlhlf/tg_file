@@ -30,6 +30,11 @@ download:
   # 并发下载的频道数量限制, 0 表示不限制 (建议根据机器网络/磁盘能力设置为 2-8)
   concurrent: 2
   fileWorkers: 4
+  rclone:
+    enabled: false
+    # configFile: C:/Users/Administrator/.config/rclone/rclone.conf
+    # transferMode: move
+    # remote: myremote:downloads
   channels:
     - id: -1001234567890
       fromMessageID: 1
