@@ -3,6 +3,7 @@ id: 0
 hash: ""
 site: ""
 botToken: ""
+# proxy: "socks5://127.0.0.1:7890"  # 可选: 代理服务器地址, 格式为 socks5://ip:port 或 http://ip:port, 为empty 则不使用代理
 debug: false
 password: ""
 userID: 0
@@ -24,6 +25,8 @@ download:
   enabled: true
   outputDir: downloads
   # 如果路径为相对路径, 它相对于运行二进制的当前工作目录 (cwd)
+  # 定时扫描间隔(秒), 0 表示不扫描, 默认 0
+  # scanInterval: 300
   globalTypes:
     - video
     - photo

@@ -112,6 +112,94 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 	}
 	wgFiles.Wait()
 	log.Printf("自动下载任务执行完成")
+
+	// 初始化 LastDownloaded map（记录每个频道已下载到的最新消息ID）
+	if infos.LastDownloaded == nil {
+		infos.LastDownloaded = make(map[int64]int32)
+	}
+	for _, task := range infos.Conf.Download.Channels {
+		if task.ID == 0 {
+			continue
+		}
+		// 使用 clientForTask 获取可用客户端以查询 latest
+		client := infos.clientForTask(task)
+		if client == nil {
+			continue
+		}
+		if latest, err := infos.getLatestMessageID(client, task.ID); err == nil {
+			infos.Mutex.Lock()
+			infos.LastDownloaded[task.ID] = latest
+			infos.Mutex.Unlock()
+		}
+	}
+
+	// 若配置了扫描间隔（或未配置），则启动周期性增量检查。
+	// 行为：初次全量下载完成后进入循环 -> 每次完成一次检测与（如有）增量下载后，等待 scanInterval 再次检测。
+	if infos.Conf != nil {
+		scanSec := infos.Conf.Download.ScanInterval
+		if scanSec <= 0 {
+			// 默认 5 分钟
+			scanSec = 300
+		}
+		scanInterval := time.Duration(scanSec) * time.Second
+		go func() {
+			for {
+				// 在每次循环开始前检查上下文是否已取消
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
+				// 扫描开始（单线程定时，不再使用 ScanRunning 原子标志）
+				func() {
+					for _, task := range infos.Conf.Download.Channels {
+						if task.ID == 0 {
+							continue
+						}
+						client := infos.clientForTask(task)
+						if client == nil {
+							continue
+						}
+						latest, err := infos.getLatestMessageID(client, task.ID)
+						if err != nil {
+							continue
+						}
+						infos.Mutex.Lock()
+						last := infos.LastDownloaded[task.ID]
+						infos.Mutex.Unlock()
+						if latest > last {
+							from := last + 1
+							log.Printf("发现频道新消息: cid=%d last=%d latest=%d, 开始增量下载", task.ID, last, latest)
+							// 为本次增量下载创建独立的并发控制与等待组
+							concurrency := infos.Conf.Download.Concurrent
+							if concurrency <= 0 {
+								concurrency = 3
+							}
+							sem := make(chan struct{}, concurrency)
+							var wg sync.WaitGroup
+							// 复制 task 并设置起始位置
+							t := task
+							t.FromMessageID = from
+							// 使用 clientNameForTask 确定用于下载的账号
+							acctName, _ := infos.clientNameForTask(task)
+							if err := infos.downloadChannelRange(context.Background(), client, outputRoot, t, sem, &wg, acctName); err == nil {
+								wg.Wait()
+								infos.Mutex.Lock()
+								infos.LastDownloaded[task.ID] = latest
+								infos.Mutex.Unlock()
+							} else {
+								log.Printf("增量下载失败: cid=%d err=%v", task.ID, err)
+							}
+						}
+					}
+				}()
+
+				// 本次扫描与可能的增量下载完成后，等待完整的扫描间隔再进行下一次检测
+				time.Sleep(scanInterval)
+			}
+		}()
+	}
 }
 
 func (infos *Infos) clientForTask(task DownloadChannel) *telegram.Client {
@@ -394,7 +482,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 		if exists, err := infos.rcloneFileExists(ctx, outputRoot, finalPath); err != nil {
 			log.Printf("rclone 文件检查失败: path=%s err=%v", displayLocalPath(finalPath), err)
 		} else if exists {
-			log.Printf("rclone 文件存在, 跳过下载: path=%s", displayLocalPath(finalPath))
+			log.Printf("rclone中存在, 跳过: path=%s", displayLocalPath(finalPath))
 			return nil
 		}
 	}
@@ -405,7 +493,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 				return rcloneErr
 			}
 			mode := infos.rcloneTransferMode()
-			log.Printf("本地文件已存在，执行 rclone 传输: user=%s path=%s", accountName, displayLocalPath(finalPath))
+			log.Printf("本地文件已存在，执行 rclone %s: user=%s path=%s", mode, accountName, displayLocalPath(finalPath))
 			if rcloneErr := infos.rcloneTransferFile(ctx, finalPath, remotePath, mode); rcloneErr != nil {
 				return rcloneErr
 			}
@@ -428,7 +516,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 		tmpFileName = fmt.Sprintf("%d - %s%s.tmp", msg.ID, content, ext)
 	}
 	tmpPath := filepath.Join(tmpDir, tmpFileName)
-	log.Printf("开始下载文件: user=%s final=%s", accountName, displayLocalPath(finalPath))
+	log.Printf("下载文件: user=%s final=%s", accountName, displayLocalPath(finalPath))
 	f, err := os.Create(tmpPath)
 	if err != nil {
 		return err

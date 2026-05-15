@@ -60,11 +60,15 @@ jobs:
       with:
         path: release-assets
 
+    - name: Get short SHA
+      id: short_sha
+      run: echo "sha=${GITHUB_SHA:0:8}" >> $GITHUB_OUTPUT
+
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ github.sha }}
-        name: ${{ github.sha }}
+        tag_name: ${{ steps.short_sha.outputs.sha }}
+        name: ${{ steps.short_sha.outputs.sha }}
         files: |
           release-assets/**/tgfilebot-linux-amd64
           release-assets/**/tgfilebot-windows-amd64.exe

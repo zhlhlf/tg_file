@@ -103,6 +103,7 @@ type Infos struct {
 	HeadCache       map[string]*MediaCache      // 缓存文件头部数据
 	TailCache       map[string]*MediaCache      // 缓存文件尾部数据
 	DownloadStarted atomic.Bool                 // 自动下载任务是否已启动
+	LastDownloaded  map[int64]int32             // 每个频道已下载到的最新消息ID
 }
 
 type colorizedWriter struct {
