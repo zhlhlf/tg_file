@@ -523,6 +523,6 @@ func evictOldestCache(cache map[string]*MediaCache, maxCount int) {
 	}
 	if oldestKey != "" {
 		delete(cache, oldestKey)
-		log.Printf("媒体缓存已淘汰最旧条目: key=%s", oldestKey)
+		debugf("媒体缓存已淘汰最旧条目: key=%s", oldestKey)
 	}
 }

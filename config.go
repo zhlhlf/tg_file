@@ -50,7 +50,7 @@ type Download struct {
 	Channels    []DownloadChannel `yaml:"channels,omitempty"`
 	Concurrent  int               `yaml:"concurrent,omitempty"`  // 同时并发下载的频道数量限制, 0 表示不限制
 	FileWorkers int               `yaml:"fileWorkers,omitempty"` // 每个文件内部的并发分片数, 0 表示使用全局 workers
-	CacheItems  int               `yaml:"cacheItems,omitempty"`  // 媒体缓存最大条目数, 默认 100
+	CacheItems  int               `yaml:"cacheItems,omitempty"`  // 媒体缓存最大条目数, 默认 10
 	ForceJoin   bool              `yaml:"forceJoin,omitempty"`   // 当账号未加入频道时尝试自动加入 (全局开关)
 	Rclone      Rclone            `yaml:"rclone,omitempty"`      // rclone 远端存在性检查配置
 }

@@ -471,7 +471,7 @@ func (stream *Stream) handleCache(task *Task, cacheKey string, contentEnd int64)
 		} else {
 			maxCount := infos.Conf.Download.CacheItems
 			if maxCount <= 0 {
-				maxCount = 100
+				maxCount = 10
 			}
 			evictOldestCache(infos.HeadCache, maxCount)
 			contents := make([]MediaContent, 0, int(stream.HeadSize/stream.ChunkSize))
@@ -491,7 +491,7 @@ func (stream *Stream) handleCache(task *Task, cacheKey string, contentEnd int64)
 		} else {
 			maxCount := infos.Conf.Download.CacheItems
 			if maxCount <= 0 {
-				maxCount = 100
+				maxCount = 10
 			}
 			evictOldestCache(infos.TailCache, maxCount)
 			contents := make([]MediaContent, 0, int(stream.TailSize/stream.ChunkSize))

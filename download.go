@@ -287,30 +287,38 @@ func (infos *Infos) logDownloadMemberships(ctx context.Context) {
 			continue
 		}
 		log.Printf("开始检测频道加入状态: cid=%d", task.ID)
+		
+		var wg sync.WaitGroup
 		for _, accountName := range accountNames {
-			client := infos.UserClients[accountName]
-			if client == nil {
-				log.Printf("账号状态: user=%s cid=%d 状态=无客户端", accountName, task.ID)
-				continue
-			}
-			latest, err := infos.getLatestMessageID(client, task.ID)
-			if err == nil {
-				log.Printf("账号状态: user=%s cid=%d 状态=已加入 latest=%d", accountName, task.ID, latest)
-				continue
-			}
-			log.Printf("账号状态: user=%s cid=%d 状态=未加入 err=%v", accountName, task.ID, err)
-			if infos.Conf.Download.ForceJoin || task.ForceJoin {
-				if jerr := tryJoinChannel(client, task.Join); jerr != nil {
-					log.Printf("账号状态: user=%s cid=%d 强制加入失败 join=%s err=%v", accountName, task.ID, task.Join, jerr)
-					continue
+			wg.Add(1)
+			go func(accountName string, task DownloadChannel) {
+				defer wg.Done()
+				
+				client := infos.UserClients[accountName]
+				if client == nil {
+					log.Printf("账号状态: user=%s cid=%d 状态=无客户端", accountName, task.ID)
+					return
 				}
-				if latest, err = infos.getLatestMessageID(client, task.ID); err == nil {
-					log.Printf("账号状态: user=%s cid=%d 强制加入成功 latest=%d", accountName, task.ID, latest)
-				} else {
-					log.Printf("账号状态: user=%s cid=%d 强制加入后仍不可用 err=%v", accountName, task.ID, err)
+				latest, err := infos.getLatestMessageID(client, task.ID)
+				if err == nil {
+					log.Printf("账号状态: user=%s cid=%d 状态=已加入 latest=%d", accountName, task.ID, latest)
+					return
 				}
-			}
+				log.Printf("账号状态: user=%s cid=%d 状态=未加入 err=%v", accountName, task.ID, err)
+				if infos.Conf.Download.ForceJoin || task.ForceJoin {
+					if jerr := tryJoinChannel(client, task.Join); jerr != nil {
+						log.Printf("账号状态: user=%s cid=%d 强制加入失败 join=%s err=%v", accountName, task.ID, task.Join, jerr)
+						return
+					}
+					if latest, err = infos.getLatestMessageID(client, task.ID); err == nil {
+						log.Printf("账号状态: user=%s cid=%d 强制加入成功 latest=%d", accountName, task.ID, latest)
+					} else {
+						log.Printf("账号状态: user=%s cid=%d 强制加入后仍不可用 err=%v", accountName, task.ID, err)
+					}
+				}
+			}(accountName, task)
 		}
+		wg.Wait()
 	}
 }
 

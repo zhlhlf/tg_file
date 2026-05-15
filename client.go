@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/amarnathcjd/gogram/telegram"
@@ -161,8 +162,15 @@ func (infos *Infos) initUserClientsForDownloadOnly() error {
 	}
 	infos.Mutex.Unlock()
 
+	var wg sync.WaitGroup
+	var failMutex sync.Mutex
 	failCount := 0
+
 	for idx, account := range accounts {
+		wg.Add(1)
+		go func(idx int, origAccount UserBot) {
+			defer wg.Done()
+			account := origAccount
 		// 优先使用手机号作为会话名（如果存在），否则使用配置的 name，若都不存在则使用 userN
 		phone := strings.TrimSpace(account.Phone)
 		var name string
@@ -177,51 +185,63 @@ func (infos *Infos) initUserClientsForDownloadOnly() error {
 		}
 		account.Name = name
 
-		client, err := telegram.NewClient(infos.userClientConf(account.Name, account.DC))
-		if err != nil {
-			failCount++
-			log.Printf("创建 UserBot[%s] 失败: %v", account.Name, err)
-			continue
-		}
-		if err = client.Connect(); err != nil {
-			failCount++
-			log.Printf("连接 UserBot[%s] 失败: %v", account.Name, err)
-			continue
-		}
-
-		me, meErr := client.GetMe()
-		if meErr != nil {
-			if strings.Contains(strings.ToUpper(meErr.Error()), "AUTH_KEY_UNREGISTERED") {
-				if err = infos.loginViaTerminal(client, account); err != nil {
-					failCount++
-					log.Printf("UserBot[%s] 登录失败: %v", account.Name, err)
-					continue
-				}
-				me, meErr = client.GetMe()
-			}
-			if meErr != nil {
+			client, err := telegram.NewClient(infos.userClientConf(account.Name, account.DC))
+			if err != nil {
+				log.Printf("创建 UserBot[%s] 失败: %v", account.Name, err)
+				failMutex.Lock()
 				failCount++
-				log.Printf("获取 UserBot[%s] 信息失败: %v", account.Name, meErr)
-				continue
+				failMutex.Unlock()
+				return
 			}
-		}
+			if err = client.Connect(); err != nil {
+				log.Printf("连接 UserBot[%s] 失败: %v", account.Name, err)
+				failMutex.Lock()
+				failCount++
+				failMutex.Unlock()
+				return
+			}
 
-		if account.UserID != 0 && me.ID != account.UserID {
-			failCount++
-			log.Printf("UserBot[%s] 账号不匹配: 配置 %d, 实际 %d", account.Name, account.UserID, me.ID)
-			continue
-		}
+			me, meErr := client.GetMe()
+			if meErr != nil {
+				if strings.Contains(strings.ToUpper(meErr.Error()), "AUTH_KEY_UNREGISTERED") {
+					if err = infos.loginViaTerminal(client, account); err != nil {
+						log.Printf("UserBot[%s] 登录失败: %v", account.Name, err)
+						failMutex.Lock()
+						failCount++
+						failMutex.Unlock()
+						return
+					}
+					me, meErr = client.GetMe()
+				}
+				if meErr != nil {
+					log.Printf("获取 UserBot[%s] 信息失败: %v", account.Name, meErr)
+					failMutex.Lock()
+					failCount++
+					failMutex.Unlock()
+					return
+				}
+			}
 
-		infos.Mutex.Lock()
-		infos.UserClients[account.Name] = client
-		if infos.DefaultUserName == "" {
-			infos.DefaultUserName = account.Name
-			infos.UserClient = client
-		}
-		infos.Mutex.Unlock()
+			if account.UserID != 0 && me.ID != account.UserID {
+				log.Printf("UserBot[%s] 账号不匹配: 配置 %d, 实际 %d", account.Name, account.UserID, me.ID)
+				failMutex.Lock()
+				failCount++
+				failMutex.Unlock()
+				return
+			}
 
-		log.Printf("UserBot[%s] 就绪: uid=%d", account.Name, me.ID)
+			infos.Mutex.Lock()
+			infos.UserClients[account.Name] = client
+			if infos.DefaultUserName == "" {
+				infos.DefaultUserName = account.Name
+				infos.UserClient = client
+			}
+			infos.Mutex.Unlock()
+
+			log.Printf("UserBot[%s] 就绪: uid=%d", account.Name, me.ID)
+		}(idx, account)
 	}
+	wg.Wait()
 
 	if infos.UserClient == nil {
 		if failCount > 0 {
