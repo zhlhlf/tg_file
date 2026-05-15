@@ -613,6 +613,19 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 	if hasContent && content != "" {
 		fileName = fmt.Sprintf("%d - %s%s", msg.ID, content, ext)
 	}
+	if infos != nil && infos.Conf != nil {
+		fileNameLower := strings.ToLower(fileName)
+		for _, rawKeyword := range infos.Conf.Download.SkipNameContains {
+			keyword := strings.TrimSpace(rawKeyword)
+			if keyword == "" {
+				continue
+			}
+			if strings.Contains(fileNameLower, strings.ToLower(keyword)) {
+				log.Printf("命中过滤规则, 跳过下载: user=%s file=%s filter=%q", accountName, fileName, keyword)
+				return nil
+			}
+		}
+	}
 	finalPath := filepath.Join(dir, fileName)
 	displayLocalPath := func(path string) string {
 		cleanPath := filepath.Clean(path)

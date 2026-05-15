@@ -47,6 +47,7 @@ type Download struct {
 	Enabled     bool              `yaml:"enabled"`
 	OutputDir   string            `yaml:"outputDir,omitempty"`
 	GlobalTypes []string          `yaml:"globalTypes,omitempty"`
+	SkipNameContains []string     `yaml:"skipNameContains,omitempty"` // 最终文件名包含任一字符串时跳过下载
 	Channels    []DownloadChannel `yaml:"channels,omitempty"`
 	Concurrent  int               `yaml:"concurrent,omitempty"`  // 同时并发下载的频道数量限制, 0 表示不限制
 	FileWorkers int               `yaml:"fileWorkers,omitempty"` // 每个文件内部的并发分片数, 0 表示使用全局 workers
