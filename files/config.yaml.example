@@ -39,13 +39,15 @@ download:
     # transferMode: move
     # remote: myremote:downloads
   channels:
-    - id: -1001234567890
+    # 方式1: 只使用 join URL (推荐，系统会自动解析频道ID)
+    - join: "https://t.me/channelname"
       fromMessageID: 1
-      user: user1
       types:
         - video
-    - id: -1009876543210
-      fromMessageID: 100
-      user: user2
-      types:
-        - photo
+    
+    # 方式2: 使用频道ID (需要提前查询到ID)
+    # - id: -1001234567890
+    #   fromMessageID: 1
+    #   user: user1
+    #   types:
+    #     - video

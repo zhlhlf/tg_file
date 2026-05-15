@@ -20,6 +20,35 @@ import (
 
 var fileNameSanitizer = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]`)
 
+// 从 Telegram 频道 URL 中提取频道用户名
+// 支持格式: https://t.me/channelname 或 t.me/channelname
+func extractChannelNameFromURL(url string) string {
+	url = strings.TrimSpace(url)
+	
+	// 移除 https:// 或 http://
+	if idx := strings.Index(url, "://"); idx != -1 {
+		url = url[idx+3:]
+	}
+	
+	// 提取 t.me/ 之后的部分
+	if strings.Contains(url, "t.me/") {
+		url = strings.SplitN(url, "t.me/", 2)[1]
+	}
+	
+	// 移除查询参数和锚点
+	if idx := strings.IndexAny(url, "?#"); idx != -1 {
+		url = url[:idx]
+	}
+	
+	// 移除尾部斜杠
+	url = strings.TrimSuffix(url, "/")
+	
+	if url != "" && !strings.Contains(url, "/") {
+		return url
+	}
+	return ""
+}
+
 func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 	if !infos.DownloadStarted.CompareAndSwap(false, true) {
 		return
@@ -78,6 +107,131 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 	}
 	rrIdx := 0
 	log.Printf("可用账号列表: %v", availableAccounts)
+
+	// 自动解析缺少 ID 的频道 URL
+	for i, task := range infos.Conf.Download.Channels {
+		log.Printf("频道[%d]: ID=%d, Join=%s", i, task.ID, task.Join)
+		if task.ID == 0 && task.Join != "" {
+			channelName := extractChannelNameFromURL(task.Join)
+			if channelName != "" {
+				// 使用第一个可用的 UserClient 解析频道 ID
+				var resolvedPeer interface{}
+				var err error
+				client := infos.UserClient
+				if client == nil && len(availableAccounts) > 0 {
+					client = infos.UserClients[availableAccounts[0]]
+				}
+				
+				if client != nil {
+					resolvedPeer, err = client.ResolvePeer(fmt.Sprintf("@%s", channelName))
+					if err != nil {
+						log.Printf("错误: 解析频道 @%s 失败: %v", channelName, err)
+					} else {
+						log.Printf("成功解析: %#v", resolvedPeer)
+					}
+				} else {
+					log.Printf("错误: 没有可用的 UserClient")
+				}
+
+				if err == nil && resolvedPeer != nil {
+					// 使用反射获取 ChannelID 字段
+					rValue := reflect.ValueOf(resolvedPeer)
+					if rValue.Kind() == reflect.Ptr {
+						rValue = rValue.Elem()
+					}
+					
+					// 尝试获取 ChannelID 字段（InputPeerChannel）或 ID 字段（其他类型）
+					var channelID int64
+					idField := rValue.FieldByName("ChannelID")
+					if !idField.IsValid() {
+						idField = rValue.FieldByName("ID")
+					}
+					
+					if idField.IsValid() && idField.CanInt() {
+						channelID = idField.Int()
+						infos.Conf.Download.Channels[i].ID = channelID
+						log.Printf("✅ 自动解析频道 %s 的 ID: %d", channelName, channelID)
+						// 检查所有 UserBot 是否已加入该频道（避免依赖本地 numeric ID 缓存，优先按 join 名称 ResolvePeer）
+						accountNames := make([]string, 0, len(infos.UserClients))
+						for name := range infos.UserClients {
+							accountNames = append(accountNames, name)
+						}
+						sort.Strings(accountNames)
+						channelNameForResolve := ""
+						if task.Join != "" {
+							channelNameForResolve = extractChannelNameFromURL(task.Join)
+						}
+						for _, an := range accountNames {
+							c := infos.UserClients[an]
+							if c == nil {
+								log.Printf("账号 %s 未就绪，跳过加入检查", an)
+								continue
+							}
+							peerCID := channelID
+							// 优先使用 join 名称在该账号上 ResolvePeer，避免依赖本地 numeric ID 缓存
+							if channelNameForResolve != "" {
+								resolved, rerr := c.ResolvePeer(fmt.Sprintf("@%s", channelNameForResolve))
+								if rerr != nil {
+									log.Printf("账号 %s ResolvePeer @%s 失败: %v", an, channelNameForResolve, rerr)
+									// 在允许强制加入时尝试加入，然后重试 ResolvePeer
+									if infos.Conf.Download.ForceJoin || task.ForceJoin {
+										if jerr := tryJoinChannel(c, task.Join); jerr != nil {
+											log.Printf("账号 %s 尝试加入频道失败: %v", an, jerr)
+											continue
+										}
+										resolved, rerr = c.ResolvePeer(fmt.Sprintf("@%s", channelNameForResolve))
+										if rerr != nil {
+											log.Printf("账号 %s 加入后 ResolvePeer 仍失败: %v", an, rerr)
+											continue
+										}
+									}
+								}
+								// 从 resolved 中提取实际的 peer id
+								if resolved != nil {
+									rv := reflect.ValueOf(resolved)
+									if rv.Kind() == reflect.Ptr {
+										rv = rv.Elem()
+									}
+									idf := rv.FieldByName("ChannelID")
+									if !idf.IsValid() {
+										idf = rv.FieldByName("ID")
+									}
+									if idf.IsValid() && idf.CanInt() {
+										peerCID = idf.Int()
+									} else {
+										log.Printf("账号 %s 无法从 ResolvePeer 返回值中提取 ID: %T", an, resolved)
+										continue
+									}
+								}
+							}
+							// 使用解析到的 peerCID 检查该账号是否能访问频道
+							if _, err := infos.getLatestMessageID(c, peerCID); err == nil {
+								log.Printf("账号 %s 已加入频道 cid=%d", an, peerCID)
+							} else {
+								log.Printf("账号 %s 未加入频道 cid=%d: %v", an, peerCID, err)
+								// 若未加入且允许强制加入，则尝试加入
+								if infos.Conf.Download.ForceJoin || task.ForceJoin {
+									if jerr := tryJoinChannel(c, task.Join); jerr == nil {
+										if _, err2 := infos.getLatestMessageID(c, peerCID); err2 == nil {
+											log.Printf("账号 %s 成功加入频道 cid=%d", an, peerCID)
+										} else {
+											log.Printf("账号 %s 加入后仍不可用 cid=%d: %v", an, peerCID, err2)
+										}
+									} else {
+										log.Printf("账号 %s 尝试加入频道失败: %v", an, jerr)
+									}
+								}
+							}
+						}
+					} else {
+						log.Printf("警告: 无法从返回值中获取 ChannelID/ID 字段, 返回类型: %T", resolvedPeer)
+					}
+				} else {
+					log.Printf("警告: 无法解析频道 %s 的 ID: %v", channelName, err)
+				}
+			}
+		}
+	}
 
 	for _, task := range infos.Conf.Download.Channels {
 		if task.ID == 0 {
@@ -861,7 +1015,6 @@ func extractMessageContent(msg telegram.NewMessage) string {
 		return strings.TrimSpace(msg.Text())
 	}
 	for _, fieldName := range []string{"Caption"} {
-		debugf("尝试提取消息内容: cid=%d mid=%d 字段=%s", msg.ChatID(), msg.ID, fieldName)
 		if text := strings.TrimSpace(readStringField(msg.Message, fieldName)); text != "" {
 			return text
 		}
