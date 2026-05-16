@@ -1,8 +1,10 @@
-port: 8080
+port: 0
 id: 0
 hash: ""
 site: ""
-botToken: ""
+botToken:
+  - "123456:AAAA_BOT_TOKEN_1"
+  - "789012:BBBB_BOT_TOKEN_2"
 # proxy: "socks5://127.0.0.1:7890"  # 可选: 代理服务器地址, 格式为 socks5://ip:port 或 http://ip:port, 为empty 则不使用代理
 debug: false
 password: ""
@@ -24,6 +26,8 @@ userBots:
 download:
   enabled: true
   outputDir: downloads
+  # 私有中转频道 URL；留空则仍由 UserBot 直接下载，设置后改为先转发到该频道，再由多个 Bot 轮询下载
+  private_channel: ""
   # 如果路径为相对路径, 它相对于运行二进制的当前工作目录 (cwd)
   # 定时扫描间隔(秒), 0 表示不扫描, 默认 0
   # scanInterval: 300

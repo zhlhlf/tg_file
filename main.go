@@ -81,7 +81,10 @@ type ID struct {
 
 // Infos 结构体保存了程序运行时的全局状态和资源句柄
 type Infos struct {
-	BotClient       *telegram.Client            // 独立的 Bot 客户端（用于与用户交互）
+	BotClient       *telegram.Client            // 主 Bot 客户端（用于与用户交互）
+	BotClients      []*telegram.Client          // 多 Bot 客户端实例
+	RelayBotClients []*telegram.Client          // 可用于私有中转频道下载的 Bot 列表
+	RelayBotLabels  []string                    // 与 RelayBotClients 对应的显示名称
 	UserClient      *telegram.Client            // 全局 UserBot 客户端实例（用于读取私有内容和流式传输）
 	UserClients     map[string]*telegram.Client // 多 UserBot 客户端实例
 	DefaultUserName string                      // 默认 UserBot 名称
@@ -94,7 +97,8 @@ type Infos struct {
 	RexRules        []*regexp.Regexp            // 预编译的群管正则规则缓存
 	FilesPath       string                      // 配置文件存放目录
 	FilePath        string                      // 日志文件路径
-	BotID           int64                       // Bot 自身的 ID
+	BotID           int64                       // 主 Bot 自身的 ID
+	BotIDs          map[int64]struct{}          // 所有 Bot 自身 ID
 	Status          atomic.Int32                // UserBot 登录状态: 0 未登录, 1 等待验证码, 2 等待二步验证, 3 已登录
 	WaitUntil       atomic.Int64                // 等待结束时间
 	Code            chan string                 // 用于接收异步提交的验证码
@@ -104,6 +108,7 @@ type Infos struct {
 	TailCache       map[string]*MediaCache      // 缓存文件尾部数据
 	DownloadStarted atomic.Bool                 // 自动下载任务是否已启动
 	LastDownloaded  map[int64]int32             // 每个频道已下载到的最新消息ID
+	PrivateChannelID int64                      // 私有中转频道 ID
 }
 
 type colorizedWriter struct {
@@ -176,9 +181,12 @@ func main() {
 				log.Printf("关闭日志文件错误: %v", err)
 			}
 		}
-		if infos.BotClient != nil {
-			if err := infos.BotClient.Disconnect(); err != nil {
-				log.Printf("Bot 退出失败: %+v", err)
+		for idx, client := range infos.BotClients {
+			if client == nil {
+				continue
+			}
+			if err := client.Disconnect(); err != nil {
+				log.Printf("Bot[%d] 退出失败: %+v", idx+1, err)
 			}
 		}
 		if infos.UserClient != nil {
@@ -202,13 +210,9 @@ func main() {
 		return
 	}
 
-	onlyDownloadMode := strings.TrimSpace(infos.Conf.BotToken) == ""
+	onlyDownloadMode := len(infos.Conf.BotTokens) == 0
 	if onlyDownloadMode {
 		log.Printf("BotToken 未配置, 将跳过 Bot 监听和 HTTP 服务, 仅执行自动下载")
-	}
-
-	if infos.Conf.Port == 0 {
-		infos.Conf.Port = 8080 // 默认端口 8080
 	}
 
 	// 4. 启动 Bot 客户端（仅在 BotToken 存在时启用）
@@ -228,16 +232,30 @@ func main() {
 		return
 	}
 
-	// 5. 初始化 UserBot 客户端（此时只是连接, 尚未完成登录流程）
-	if err = infos.userBotClient(); err != nil {
-		log.Printf("UserBot 启动失败: %+v", err)
-		return
-	}
+	// 5. 优先按 userBots 配置初始化多账号；若未配置则回退到旧的单 UserBot 模式
+	if len(infos.Conf.EffectiveUserBots()) > 0 {
+		if err = infos.initUserClientsForDownloadOnly(); err != nil {
+			log.Printf("初始化 UserBots 失败: %+v", err)
+		} else if infos.UserClient != nil {
+			infos.Status.Store(3)
+			if infos.BotClient != nil {
+				go infos.startConfiguredDownloads(context.Background())
+			} else {
+				infos.startConfiguredDownloads(context.Background())
+			}
+		}
+	} else {
+		// 兼容旧模式：初始化单 UserBot 客户端（此时只是连接, 尚未完成登录流程）
+		if err = infos.userBotClient(); err != nil {
+			log.Printf("UserBot 启动失败: %+v", err)
+			return
+		}
 
-	// 6. 检查 UserBot 登录状态, 尝试自动登录（若已存在 session）
-	if err := infos.checkStatus(); err != nil {
-		log.Printf("UserBot 登录失败: %+v", err)
-		infos.resetStatus()
+		// 检查 UserBot 登录状态, 尝试自动登录（若已存在 session）
+		if err := infos.checkStatus(); err != nil {
+			log.Printf("UserBot 登录失败: %+v", err)
+			infos.resetStatus()
+		}
 	}
 
 	// 忽略 SIGPIPE 信号, 防止由于网络异常断开导致进程崩溃
@@ -247,28 +265,37 @@ func main() {
 	statusChan := make(chan os.Signal, 1)
 	signal.Notify(statusChan, os.Interrupt, syscall.SIGTERM)
 
-	// 创建 HTTP 服务器
-	server := &http.Server{
-		Addr:              fmt.Sprintf(":%d", infos.Conf.Port),
-		Handler:           http.HandlerFunc(handleMain),
-		ReadTimeout:       30 * time.Second,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       600 * time.Second,
-		MaxHeaderBytes:    1 << 20, // 最大头部字节数 (1MB)
+	var server *http.Server
+	if infos.Conf.Port != 0 {
+		// 创建 HTTP 服务器
+		server = &http.Server{
+			Addr:              fmt.Sprintf(":%d", infos.Conf.Port),
+			Handler:           http.HandlerFunc(handleMain),
+			ReadTimeout:       30 * time.Second,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       600 * time.Second,
+			MaxHeaderBytes:    1 << 20, // 最大头部字节数 (1MB)
+		}
+
+		// 7. 在独立协程中启动 HTTP 服务
+		go func() {
+			log.Printf("HTTP 服务运行在 %d 端口", infos.Conf.Port)
+
+			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("HTTP 服务启动失败: %+v", err)
+				statusChan <- os.Interrupt
+			}
+		}()
+	} else {
+		log.Printf("port=0，跳过 HTTP 服务监听")
 	}
 
-	// 7. 在独立协程中启动 HTTP 服务
-	go func() {
-		log.Printf("HTTP 服务运行在 %d 端口", infos.Conf.Port)
-
-		if err := server.ListenAndServe(); err != nil {
-			log.Printf("HTTP 服务启动失败: %+v", err)
-			statusChan <- os.Interrupt
-		}
-	}()
-
-	// 8. 发送程序启动通知
-	sendMS(nil, "程序已启动", nil, 60)
+	// 8. 发送程序启动通知（仅在已配置管理员 userID 时发送）
+	if infos.Conf.UserID != 0 {
+		sendMS(nil, "程序已启动", nil, 60)
+	} else {
+		log.Printf("程序已启动；当前未配置 userID，因此不发送启动通知")
+	}
 
 	// 阻塞等待直到接收到退出信号
 	status := <-statusChan
@@ -277,12 +304,16 @@ func main() {
 	// 设置关闭的超时时间，例如 10 秒
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("HTTP 服务关闭异常: %+v", err)
-	} else {
-		log.Printf("HTTP 服务已优雅关闭")
+	if server != nil {
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("HTTP 服务关闭异常: %+v", err)
+		} else {
+			log.Printf("HTTP 服务已优雅关闭")
+		}
 	}
-	sendMS(nil, "程序已退出", nil, 60)
+	if infos.Conf.UserID != 0 {
+		sendMS(nil, "程序已退出", nil, 60)
+	}
 }
 
 // newInfos 初始化全局 Infos 对象, 加载日志和配置
@@ -295,6 +326,7 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 		Cond:        sync.NewCond(mutex),
 		Code:        make(chan string, 1),
 		Pass:        make(chan string, 1),
+		BotIDs:      make(map[int64]struct{}, 2),
 		HeadCache:   make(map[string]*MediaCache, 4),
 		TailCache:   make(map[string]*MediaCache, 4),
 		UserClients: make(map[string]*telegram.Client, 2),
@@ -335,17 +367,21 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 	infos.buildIDs()
 	infos.buildRexRules()
 
-	// 获取 BotID
-	if conf.BotToken != "" {
-		parts := strings.Split(conf.BotToken, ":")
+	for _, token := range conf.BotTokens {
+		parts := strings.Split(token, ":")
 		if len(parts) < 1 {
-			return nil, fmt.Errorf("BotToken 格式错误: %s", conf.BotToken)
+			return nil, fmt.Errorf("BotToken 格式错误: %s", token)
 		}
 		result := strings.TrimSpace(parts[0])
-		infos.BotID, err = strconv.ParseInt(result, 10, 64)
-		if err != nil {
-			log.Printf("解析 BotID 失败: %+v", err)
+		botID, parseErr := strconv.ParseInt(result, 10, 64)
+		if parseErr != nil {
+			log.Printf("解析 BotID 失败: %+v", parseErr)
+			continue
 		}
+		if infos.BotID == 0 {
+			infos.BotID = botID
+		}
+		infos.BotIDs[botID] = struct{}{}
 	}
 
 	return infos, nil

@@ -16,7 +16,7 @@ import (
 type Conf struct {
 	Site      string    `yaml:"site"`                // 反代域名, 用于生成公开访问链接
 	AppHash   string    `yaml:"hash"`                // Telegram API Hash, 从 my.telegram.org 获取
-	BotToken  string    `yaml:"botToken"`            // Telegram Bot Token, 用于交互和管理
+	BotTokens []string  `yaml:"botToken"`            // Telegram Bot Token 列表, 用于交互和管理
 	Proxy     string    `yaml:"proxy,omitempty"`     // 代理服务器地址, 用于连接 Telegram
 	Password  string    `yaml:"password,omitempty"`  // 访问 /link 接口时可选的身份验证密码
 	Debug     bool      `yaml:"debug,omitempty"`     // 是否启用调试日志
@@ -46,6 +46,7 @@ type UserBot struct {
 type Download struct {
 	Enabled     bool              `yaml:"enabled"`
 	OutputDir   string            `yaml:"outputDir,omitempty"`
+	PrivateChannel string         `yaml:"private_channel,omitempty"` // 私有中转频道 URL，配置后启用“转发到私有频道后由 Bot 下载”的逻辑
 	GlobalTypes []string          `yaml:"globalTypes,omitempty"`
 	SkipNameContains []string     `yaml:"skipNameContains,omitempty"` // 最终文件名包含任一字符串时跳过下载
 	Channels    []DownloadChannel `yaml:"channels,omitempty"`
@@ -76,7 +77,7 @@ type DownloadChannel struct {
 type confRaw struct {
 	Site      string       `yaml:"site"`
 	AppHash   string       `yaml:"hash"`
-	BotToken  string       `yaml:"botToken"`
+	BotToken  any          `yaml:"botToken"`
 	Proxy     string       `yaml:"proxy,omitempty"`
 	Password  string       `yaml:"password,omitempty"`
 	Debug     bool         `yaml:"debug,omitempty"`
@@ -149,11 +150,15 @@ func (conf *Conf) UnmarshalYAML(value *yaml.Node) error {
 	if err != nil {
 		return err
 	}
+	botTokens, err := parseStringSliceField(raw.BotToken, "botToken")
+	if err != nil {
+		return err
+	}
 
 	*conf = Conf{
 		Site:      raw.Site,
 		AppHash:   raw.AppHash,
-		BotToken:  raw.BotToken,
+		BotTokens: botTokens,
 		Proxy:     raw.Proxy,
 		Password:  raw.Password,
 		Debug:     raw.Debug,
@@ -172,6 +177,38 @@ func (conf *Conf) UnmarshalYAML(value *yaml.Node) error {
 		Download:  raw.Download,
 	}
 	return nil
+}
+
+func parseStringSliceField(v any, field string) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	switch value := v.(type) {
+	case string:
+		src := strings.TrimSpace(value)
+		if src == "" {
+			return nil, nil
+		}
+		return []string{src}, nil
+	case []any:
+		result := make([]string, 0, len(value))
+		for idx, item := range value {
+			str, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("字段 %s[%d] 类型 %T 不支持，需为字符串", field, idx, item)
+			}
+			str = strings.TrimSpace(str)
+			if str != "" {
+				result = append(result, str)
+			}
+		}
+		if len(result) == 0 {
+			return nil, nil
+		}
+		return result, nil
+	default:
+		return nil, fmt.Errorf("字段 %s 类型 %T 不支持，需为字符串或字符串数组", field, v)
+	}
 }
 
 type downloadChannelRaw struct {
@@ -243,6 +280,17 @@ func (conf *Conf) EffectiveUserBots() []UserBot {
 		UserID: conf.UserID,
 		DC:     conf.DC,
 	}}
+}
+
+func (conf *Conf) EffectiveDownloadUserBots() []UserBot {
+	bots := conf.EffectiveUserBots()
+	if len(bots) == 0 {
+		return bots
+	}
+	if strings.TrimSpace(conf.Download.PrivateChannel) != "" {
+		return bots[:1]
+	}
+	return bots
 }
 
 func parseIntField(v any, field string) (int, error) {

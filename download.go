@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/amarnathcjd/gogram/telegram"
@@ -49,6 +50,25 @@ func extractChannelNameFromURL(url string) string {
 	return ""
 }
 
+func normalizeTelegramPeerTarget(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "@") {
+		return raw
+	}
+	name := extractChannelNameFromURL(raw)
+	if name != "" {
+		return "@" + name
+	}
+	// 邀请链接 / + 链接不能转成 @username，直接保留原值交给底层解析
+	if strings.Contains(raw, "t.me/+") || strings.Contains(raw, "joinchat/") {
+		return raw
+	}
+	return raw
+}
+
 func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 	if !infos.DownloadStarted.CompareAndSwap(false, true) {
 		return
@@ -82,7 +102,15 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 		return
 	}
 
+	if err := infos.preparePrivateChannelRelay(); err != nil {
+		log.Printf("私有中转频道初始化失败: %v", err)
+		return
+	}
+
 	log.Printf("自动下载开始执行, 频道数: %d, 输出目录: %s", len(infos.Conf.Download.Channels), outputRoot)
+	if infos.PrivateChannelID != 0 {
+		log.Printf("已启用私有中转下载: private_channel=%s cid=%d 可用Bot=%d", infos.Conf.Download.PrivateChannel, infos.PrivateChannelID, len(infos.RelayBotClients))
+	}
 	infos.logDownloadMemberships(ctx)
 	// 并发控制: `concurrent` 限制同时进行的文件下载数量（不是频道）
 	concurrency := infos.Conf.Download.Concurrent
@@ -426,6 +454,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 		}
 	}
 	rrIdx := 0
+	var relayIdx uint64
 
 	for cursor := start; cursor <= latest; cursor += 100 {
 		select {
@@ -497,7 +526,11 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				var err error
 				const maxAttempts = 3
 				for attempt := 1; attempt <= maxAttempts; attempt++ {
-					err = infos.downloadMessageToFile(ctx, c, outputRoot, m, acct)
+					if infos.PrivateChannelID != 0 {
+						err = infos.downloadMessageViaRelay(ctx, c, outputRoot, m, acct, &relayIdx)
+					} else {
+						err = infos.downloadMessageToFile(ctx, c, c, outputRoot, m, m, acct)
+					}
 					if err == nil {
 						return
 					}
@@ -511,6 +544,119 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 		}
 	}
 	return nil
+}
+
+func (infos *Infos) preparePrivateChannelRelay() error {
+	privateChannel := strings.TrimSpace(infos.Conf.Download.PrivateChannel)
+	if privateChannel == "" {
+		infos.PrivateChannelID = 0
+		infos.RelayBotClients = nil
+		infos.RelayBotLabels = nil
+		return nil
+	}
+
+	resolver := infos.UserClient
+	if resolver == nil {
+		for _, client := range infos.UserClients {
+			if client != nil {
+				resolver = client
+				break
+			}
+		}
+	}
+	if resolver == nil {
+		return fmt.Errorf("private_channel 已配置，但没有可用 UserBot 用于解析")
+	}
+
+	resolveTarget := normalizeTelegramPeerTarget(privateChannel)
+	resolvedPeer, err := resolver.ResolvePeer(resolveTarget)
+	if err != nil {
+		return fmt.Errorf("解析 private_channel 失败: target=%s err=%w", resolveTarget, err)
+	}
+	privateID, err := extractPeerID(resolvedPeer)
+	if err != nil {
+		return err
+	}
+	infos.PrivateChannelID = privateID
+
+	infos.RelayBotClients = nil
+	infos.RelayBotLabels = nil
+	botResolveTarget := normalizeTelegramPeerTarget(privateChannel)
+	for idx, client := range infos.BotClients {
+		if client == nil {
+			continue
+		}
+		botPeer, err := client.ResolvePeer(botResolveTarget)
+		if err != nil {
+			log.Printf("Bot[%d] 无法解析 private_channel target=%s: %v", idx+1, botResolveTarget, err)
+			continue
+		}
+		botPrivateID, err := extractPeerID(botPeer)
+		if err != nil {
+			log.Printf("Bot[%d] 无法提取 private_channel ID: %v", idx+1, err)
+			continue
+		}
+		log.Printf("Bot[%d] 已解析 private_channel cid=%d", idx+1, botPrivateID)
+		infos.RelayBotClients = append(infos.RelayBotClients, client)
+		infos.RelayBotLabels = append(infos.RelayBotLabels, fmt.Sprintf("bot%d", idx+1))
+	}
+	if len(infos.RelayBotClients) == 0 {
+		return fmt.Errorf("private_channel 已配置，但没有任何 Bot 可访问该频道")
+	}
+	return nil
+}
+
+func extractPeerID(peer any) (int64, error) {
+	rValue := reflect.ValueOf(peer)
+	if !rValue.IsValid() {
+		return 0, fmt.Errorf("peer 无效")
+	}
+	if rValue.Kind() == reflect.Ptr {
+		if rValue.IsNil() {
+			return 0, fmt.Errorf("peer 为空")
+		}
+		rValue = rValue.Elem()
+	}
+	for _, fieldName := range []string{"ChannelID", "ChatID", "UserID", "ID"} {
+		field := rValue.FieldByName(fieldName)
+		if field.IsValid() && field.CanInt() {
+			return field.Int(), nil
+		}
+	}
+	return 0, fmt.Errorf("无法从 peer 中提取 ID: %T", peer)
+}
+
+func (infos *Infos) pickRelayBot(counter *uint64) (*telegram.Client, string, error) {
+	if len(infos.RelayBotClients) == 0 {
+		return nil, "", fmt.Errorf("没有可用的中转下载 Bot")
+	}
+	idx := int(atomic.AddUint64(counter, 1)-1) % len(infos.RelayBotClients)
+	return infos.RelayBotClients[idx], infos.RelayBotLabels[idx], nil
+}
+
+func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, userAccount string, counter *uint64) error {
+	relayForwarded, err := userClient.Forward(infos.PrivateChannelID, sourceMsg.Peer, []int32{sourceMsg.ID}, &telegram.ForwardOptions{HideAuthor: true})
+	if err != nil {
+		return fmt.Errorf("转发到 private_channel 失败: %w", err)
+	}
+	if len(relayForwarded) == 0 {
+		return fmt.Errorf("转发到 private_channel 后未返回消息")
+	}
+
+	relayBot, relayLabel, err := infos.pickRelayBot(counter)
+	if err != nil {
+		return err
+	}
+	relayMsgID := relayForwarded[0].ID
+	relayTarget := normalizeTelegramPeerTarget(infos.Conf.Download.PrivateChannel)
+	relayMessages, err := relayBot.GetMessages(relayTarget, &telegram.SearchOption{IDs: []int32{relayMsgID}})
+	if err != nil {
+		return fmt.Errorf("Bot 获取中转消息失败: bot=%s mid=%d err=%w", relayLabel, relayMsgID, err)
+	}
+	if len(relayMessages) == 0 {
+		return fmt.Errorf("Bot 未获取到中转消息: bot=%s mid=%d", relayLabel, relayMsgID)
+	}
+	return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, sourceMsg, relayMessages[0], userAccount+"->"+relayLabel)
 }
 
 func (infos *Infos) logDownloadMemberships(ctx context.Context) {
@@ -575,31 +721,31 @@ func (infos *Infos) getLatestMessageID(client *telegram.Client, cid int64) (int3
 	return ms[0].ID, nil
 }
 
-func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.Client, outputRoot string, msg telegram.NewMessage, accountName string) error {
+func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *telegram.Client, downloadClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, downloadMsg telegram.NewMessage, accountName string) error {
 	msgTime := time.Now()
-	if msg.Message != nil && msg.Message.Date != 0 {
-		msgTime = time.Unix(int64(msg.Message.Date), 0)
+	if sourceMsg.Message != nil && sourceMsg.Message.Date != 0 {
+		msgTime = time.Unix(int64(sourceMsg.Message.Date), 0)
 	}
 
-	rawText := extractMessageContent(msg)
+	rawText := extractMessageContent(sourceMsg)
 	if strings.TrimSpace(rawText) == "" {
-		if groupCaption, err := infos.getMediaGroupCaption(ctx, client, msg); err != nil {
-			log.Printf("消息组 caption 获取失败: cid=%d mid=%d err=%v", msg.ChatID(), msg.ID, err)
+		if groupCaption, err := infos.getMediaGroupCaption(ctx, sourceClient, sourceMsg); err != nil {
+			log.Printf("消息组 caption 获取失败: cid=%d mid=%d err=%v", sourceMsg.ChatID(), sourceMsg.ID, err)
 		} else if strings.TrimSpace(groupCaption) != "" {
 			rawText = groupCaption
-			debugf("消息组 caption 命中: cid=%d mid=%d caption=%q", msg.ChatID(), msg.ID, rawText)
+			debugf("消息组 caption 命中: cid=%d mid=%d caption=%q", sourceMsg.ChatID(), sourceMsg.ID, rawText)
 		}
 	}
-	debugf("原始消息内容: cid=%d mid=%d caption=%q fileName=%q", msg.ChatID(), msg.ID, rawText, func() string {
-		if msg.File != nil {
-			return msg.File.Name
+	debugf("原始消息内容: cid=%d mid=%d caption=%q fileName=%q", sourceMsg.ChatID(), sourceMsg.ID, rawText, func() string {
+		if sourceMsg.File != nil {
+			return sourceMsg.File.Name
 		}
 		return ""
 	}())
 
-	channelName := strings.TrimSpace(msg.Channel.Title)
+	channelName := strings.TrimSpace(sourceMsg.Channel.Title)
 	if channelName == "" {
-		channelName = strconv.FormatInt(msg.ChatID(), 10)
+		channelName = strconv.FormatInt(sourceMsg.ChatID(), 10)
 	}
 	channelName = sanitizeFileName(channelName)
 
@@ -607,11 +753,11 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 	hasContent := content != ""
 	content = sanitizeFileName(content)
 
-	ext := determineFileExtension(msg)
+	ext := determineFileExtension(sourceMsg)
 	dir := filepath.Join(outputRoot, channelName, fmt.Sprintf("%04d_%02d", msgTime.Year(), msgTime.Month()))
-	fileName := fmt.Sprintf("%d%s", msg.ID, ext)
+	fileName := fmt.Sprintf("%d%s", sourceMsg.ID, ext)
 	if hasContent && content != "" {
-		fileName = fmt.Sprintf("%d - %s%s", msg.ID, content, ext)
+		fileName = fmt.Sprintf("%d - %s%s", sourceMsg.ID, content, ext)
 	}
 	if infos != nil && infos.Conf != nil {
 		fileNameLower := strings.ToLower(fileName)
@@ -678,9 +824,9 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 	}
 
 	// 记录开始下载日志
-	tmpFileName := fmt.Sprintf("%d%s.tmp", msg.ID, ext)
+	tmpFileName := fmt.Sprintf("%d%s.tmp", sourceMsg.ID, ext)
 	if hasContent && content != "" {
-		tmpFileName = fmt.Sprintf("%d - %s%s.tmp", msg.ID, content, ext)
+		tmpFileName = fmt.Sprintf("%d - %s%s.tmp", sourceMsg.ID, content, ext)
 	}
 	tmpPath := filepath.Join(tmpDir, tmpFileName)
 	log.Printf("下载文件: user=%s final=%s", accountName, displayLocalPath(finalPath))
@@ -707,12 +853,12 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 	if workers <= 0 {
 		workers = 1
 	}
-	stream := newStream(fileCtx, client, msg.Media(), workers, msg.ID, msg.ChatID(), msg.File.Size, msg.File.Name)
+	stream := newStream(fileCtx, downloadClient, downloadMsg.Media(), workers, downloadMsg.ID, downloadMsg.ChatID(), downloadMsg.File.Size, downloadMsg.File.Name)
 	if err := stream.warmConnection(fileCtx); err != nil {
 		_ = f.Close()
 		return err
 	}
-	go stream.start(0, msg.File.Size-1)
+	go stream.start(0, downloadMsg.File.Size-1)
 	defer func() {
 		stream.clean()
 		_ = f.Close()
@@ -735,7 +881,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 			if infos != nil && infos.Conf != nil && infos.Conf.Debug {
 				delta := totalWritten - lastWritten
 				lastWritten = totalWritten
-				debugf("下载速度: cid=%d mid=%d %s/s (written=%d)", msg.ChatID(), msg.ID, humanizeBytes(delta), totalWritten)
+				debugf("下载速度: cid=%d mid=%d %s/s (written=%d)", downloadMsg.ChatID(), downloadMsg.ID, humanizeBytes(delta), totalWritten)
 			}
 		case task := <-stream.Tasks:
 			if task == nil {
@@ -755,7 +901,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 			}
 			totalWritten += int64(n)
 
-			if task.ContentEnd >= msg.File.Size-1 {
+			if task.ContentEnd >= downloadMsg.File.Size-1 {
 				// flush and close before verification
 				if err := f.Sync(); err != nil {
 					debugf("文件同步失败: %v", err)
@@ -770,11 +916,11 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 					_ = os.Remove(tmpPath)
 					return statErr
 				}
-				if msg.File != nil && msg.File.Size > 0 {
-					if fi.Size() != msg.File.Size {
+				if downloadMsg.File != nil && downloadMsg.File.Size > 0 {
+					if fi.Size() != downloadMsg.File.Size {
 						// 清理临时文件
 						_ = os.Remove(tmpPath)
-						return fmt.Errorf("文件大小校验失败: 期望 %d, 实际 %d", msg.File.Size, fi.Size())
+						return fmt.Errorf("文件大小校验失败: 期望 %d, 实际 %d", downloadMsg.File.Size, fi.Size())
 					}
 				}
 
@@ -788,7 +934,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 				}
 
 				// 尝试从消息元数据获取远端提供的 MD5（字段名可能不同，使用反射尝试多种常见名称）
-				expected := getRemoteFileMD5(msg)
+				expected := getRemoteFileMD5(downloadMsg)
 				if expected != "" {
 					if finalMD5 != expected {
 						_ = os.Remove(tmpPath)
@@ -846,7 +992,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 			timer.Reset(30 * time.Second)
 		case <-timer.C:
 			_ = os.Remove(tmpPath)
-			return fmt.Errorf("下载超时: cid=%d mid=%d", msg.ChatID(), msg.ID)
+			return fmt.Errorf("下载超时: cid=%d mid=%d", downloadMsg.ChatID(), downloadMsg.ID)
 		}
 	}
 }

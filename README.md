@@ -34,6 +34,12 @@ copy files\config.yaml.example files\config.yaml
 
 2. 修改 `files/config.yaml`，填入 Telegram `id`、`hash`、`userBots`、`botToken` 等信息。
 
+```yaml
+botToken:
+  - "123456:AAAA_BOT_TOKEN_1"
+  - "789012:BBBB_BOT_TOKEN_2"
+```
+
 3. 启动程序。
 
 ```powershell
@@ -58,9 +64,9 @@ go run . -files files
 
 - `id`：Telegram API ID
 - `hash`：Telegram API Hash
-- `botToken`：Bot Token
+- `botToken`：Bot Token，支持单个字符串或字符串列表；推荐写成 YAML 列表，一行一个 token；列表模式下启动时会登录全部 Bot，第一个 Bot 作为主通知 Bot
 - `site`：站点域名，用于链接生成
-- `port`：HTTP 服务端口
+- `port`：HTTP 服务端口，默认 `0`，仅当设置为非 `0` 数字时才会监听 HTTP
 - `password`：访问接口时使用的密码
 - `debug`：是否开启调试日志
 - `workers`：下载和流式读取的基础并发数
@@ -69,6 +75,7 @@ go run . -files files
 - `userBots`：多个 UserBot 账号配置
 - `download.enabled`：是否启用自动下载
 - `download.outputDir`：下载输出目录
+- `download.private_channel`：私有中转频道 URL，配置后会先由 UserBot 转发到该频道，再由多个 Bot 轮询下载
 - `download.globalTypes`：默认允许下载的媒体类型
 - `download.concurrent`：同时处理的频道数量
 - `download.fileWorkers`：单文件内部并发分片数
@@ -85,6 +92,7 @@ go run . -files files
 download:
   enabled: true
   outputDir: downloads
+  private_channel: "https://t.me/your_private_channel"
   concurrent: 2
   fileWorkers: 4
   forceJoin: true

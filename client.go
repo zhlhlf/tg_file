@@ -146,7 +146,7 @@ func (infos *Infos) loginViaTerminal(client *telegram.Client, account UserBot) e
 }
 
 func (infos *Infos) initUserClientsForDownloadOnly() error {
-	accounts := infos.Conf.EffectiveUserBots()
+	accounts := infos.Conf.EffectiveDownloadUserBots()
 	if len(accounts) == 0 {
 		// try to auto-load sessions from sessions/ directory
 		loaded := infos.loadSessionsDirClients()
@@ -161,6 +161,10 @@ func (infos *Infos) initUserClientsForDownloadOnly() error {
 		infos.UserClients = make(map[string]*telegram.Client, len(accounts))
 	}
 	infos.Mutex.Unlock()
+
+	if strings.TrimSpace(infos.Conf.Download.PrivateChannel) != "" {
+		log.Printf("private_channel 模式已启用，仅初始化第一个 UserBot: %s", accounts[0].Name)
+	}
 
 	var wg sync.WaitGroup
 	var failMutex sync.Mutex
@@ -314,35 +318,52 @@ func (infos *Infos) loadSessionsDirClients() map[string]*telegram.Client {
 	return loaded
 }
 
-// startBot 创建并连接 Bot 客户端, 注册消息处理器并设置命令菜单
+// startBot 创建并连接所有 Bot 客户端, 注册消息处理器并设置命令菜单
 func (infos *Infos) startBot() (err error) {
-	// 创建 Bot 客户端
-	client, err := telegram.NewClient(botConf("bot"))
-	if err != nil {
-		log.Printf("创建 Bot 客户端失败: %+v", err)
-		return err
+	clients := make([]*telegram.Client, 0, len(infos.Conf.BotTokens))
+	for idx, token := range infos.Conf.BotTokens {
+		client, createErr := telegram.NewClient(botConf(fmt.Sprintf("bot_%d", idx+1)))
+		if createErr != nil {
+			log.Printf("创建 Bot[%d] 客户端失败: %+v", idx+1, createErr)
+			return createErr
+		}
+
+		if err = client.Connect(); err != nil {
+			log.Printf("Bot[%d] 连接失败: %+v", idx+1, err)
+			return err
+		}
+
+		if err = client.LoginBot(token); err != nil {
+			log.Printf("Bot[%d] 登录失败: %+v", idx+1, err)
+			return err
+		}
+
+		client.On(telegram.OnMessage, handleBotCommand)
+		infos.setupBotCommands(client)
+		clients = append(clients, client)
+		log.Printf("Bot[%d] 启动成功", idx+1)
 	}
 
-	// 连接 Bot
-	if err = client.Connect(); err != nil {
-		log.Printf("Bot 连接失败: %+v", err)
-		return err
+	infos.Mutex.Lock()
+	infos.BotClients = clients
+	if len(clients) > 0 {
+		infos.BotClient = clients[0]
 	}
+	infos.Mutex.Unlock()
+	return nil
+}
 
-	// 登录 Bot
-	if err = client.LoginBot(infos.Conf.BotToken); err != nil {
-		log.Printf("Bot 登录失败: %+v", err)
-		return err
-	}
-
-	// 注册 Bot 命令处理函数
-	client.On(telegram.OnMessage, handleBotCommand)
-
+func (infos *Infos) setupBotCommands(client *telegram.Client) {
 	go func() {
 		// 先清空默认的命令列表, 确保没有权限的用户什么也看不到
 		_, err := client.SetBotCommands([]*telegram.BotCommand{}, nil)
 		if err != nil {
 			log.Printf("清空默认命令失败: %+v", err)
+		}
+
+		if infos.Conf.UserID == 0 {
+			log.Printf("userID=0，跳过为管理员设置 Bot 命令；请先登录 UserBot 或手动填写 userID")
+			return
 		}
 
 		userID, err := client.ResolvePeer(infos.Conf.UserID)
@@ -462,13 +483,6 @@ func (infos *Infos) startBot() (err error) {
 			}
 		}
 	}()
-
-	log.Printf("Bot 启动成功")
-
-	infos.Mutex.Lock()
-	infos.BotClient = client
-	infos.Mutex.Unlock()
-	return nil
 }
 
 // userBotClient 创建并连接 UserBot 客户端（不执行登录, 仅建立连接）
@@ -647,6 +661,17 @@ func (infos *Infos) checkStatus() (err error) {
 		infos.Status.Store(0)
 		infos.Mutex.Unlock()
 		return nil
+	}
+
+	if infos.Conf.UserID == 0 {
+		infos.Mutex.Lock()
+		infos.Conf.UserID = me.ID
+		infos.IDs[me.ID] = ID{IsAdmin: true, IsWhite: true}
+		if saveErr := saveConf(infos.Conf, infos.FilesPath); saveErr != nil {
+			log.Printf("自动写入 userID 失败: %+v", saveErr)
+		}
+		infos.Mutex.Unlock()
+		log.Printf("检测到 userID 未配置，已自动设置为当前 UserBot: %d", me.ID)
 	}
 
 	if me.ID == infos.Conf.UserID {

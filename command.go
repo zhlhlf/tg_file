@@ -15,7 +15,7 @@ import (
 
 // handleBotCommand 是 Bot 的总消息分发入口，处理所有管理指令
 func handleBotCommand(m *telegram.NewMessage) error {
-	if m.Sender.ID == infos.BotID {
+	if _, ok := infos.BotIDs[m.Sender.ID]; ok {
 		return nil
 	}
 
@@ -853,6 +853,10 @@ func sendMS(m *telegram.NewMessage, src any, params *telegram.SendOptions, wait 
 		}
 		return
 	case infos.BotClient != nil:
+		if infos.Conf.UserID == 0 {
+			log.Printf("跳过主动发送消息: userID=0, message=%v", src)
+			return
+		}
 		ms, err := infos.BotClient.SendMessage(infos.Conf.UserID, src, params)
 		if err != nil {
 			log.Printf("发送消息失败: %+v", err)

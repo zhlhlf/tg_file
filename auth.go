@@ -15,14 +15,19 @@ func (infos *Infos) buildIDs() {
 	infos.Mutex.Lock()
 	defer infos.Mutex.Unlock()
 	// 检查UserID是否在IDs中
-	if value, ok := infos.IDs[infos.Conf.UserID]; !ok {
-		value.IsAdmin = true
-		value.IsWhite = true
-		infos.IDs[infos.Conf.UserID] = value
+	if infos.Conf.UserID != 0 {
+		if value, ok := infos.IDs[infos.Conf.UserID]; !ok {
+			value.IsAdmin = true
+			value.IsWhite = true
+			infos.IDs[infos.Conf.UserID] = value
+		}
 	}
 
 	// 检查AdminIDs是否在IDs中
 	for _, id := range infos.Conf.AdminIDs {
+		if id == 0 {
+			continue
+		}
 		if value, ok := infos.IDs[id]; !ok {
 			value.IsAdmin = true
 			value.IsWhite = true
@@ -32,6 +37,9 @@ func (infos *Infos) buildIDs() {
 
 	// 检查WhiteIDs是否在IDs中
 	for _, id := range infos.Conf.WhiteIDs {
+		if id == 0 {
+			continue
+		}
 		if value, ok := infos.IDs[id]; !ok {
 			value.IsWhite = true
 			infos.IDs[id] = value
