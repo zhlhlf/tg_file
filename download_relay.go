@@ -180,7 +180,7 @@ func formatRate(bytesPerSec float64) string {
 	return fmt.Sprintf("%.2f%s", bytesPerSec, units[idx])
 }
 
-func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, userAccount string, counter *uint64) error {
+func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, userAccount string, counter *uint64, cache *mediaResolveCache) error {
 	relayBot, relayLabel, relayBotID, relayTarget, err := infos.pickRelayBot(counter)
 	if err != nil {
 		return err
@@ -202,7 +202,7 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 		return fmt.Errorf("刷新后的源消息不包含媒体: cid=%d mid=%d", refreshedMsg.ChatID(), refreshedMsg.ID)
 	}
 
-	targetInfo, err := infos.resolveMediaTarget(ctx, userClient, outputRoot, refreshedMsg)
+	targetInfo, err := infos.resolveMediaTarget(ctx, userClient, outputRoot, refreshedMsg, cache)
 	if err != nil {
 		return err
 	}
@@ -265,7 +265,7 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 		if cachedMsg, ok := infos.getRelayInboxMedia(relayBotID, senderID, 0, captionKey); ok {
 			debugf("命中 Bot 监听缓存: bot=%s senderID=%d cachedMid=%d attempt=%d caption=%s", relayLabel, senderID, cachedMsg.ID, i, captionKey)
 			cachedMsg.Client = relayBot
-			return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, cachedMsg, userAccount+"->"+relayLabel)
+			return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, cachedMsg, userAccount+"->"+relayLabel, cache)
 		}
 		debugf("等待 Bot 监听缓存中: bot=%s senderID=%d attempt=%d caption=%s", relayLabel, senderID, i, captionKey)
 		time.Sleep(500 * time.Millisecond)

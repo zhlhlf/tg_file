@@ -25,8 +25,8 @@ func (infos *Infos) getLatestMessageID(client *telegram.Client, cid int64) (int3
 	return ms[0].ID, nil
 }
 
-func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *telegram.Client, downloadClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, downloadMsg telegram.NewMessage, accountName string) error {
-	targetInfo, err := infos.resolveMediaTarget(ctx, sourceClient, outputRoot, sourceMsg)
+func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *telegram.Client, downloadClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, downloadMsg telegram.NewMessage, accountName string, cache *mediaResolveCache) error {
+	targetInfo, err := infos.resolveMediaTarget(ctx, sourceClient, outputRoot, sourceMsg, cache)
 	if err != nil {
 		return err
 	}

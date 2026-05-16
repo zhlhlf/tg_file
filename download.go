@@ -455,14 +455,14 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	rrIdx := 0
 	var relayIdx uint64
 
-	for cursor := start; cursor <= latest; cursor += 100 {
+	for cursor := start; cursor <= latest; cursor += 30 {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		end := cursor + 99
+		end := cursor + 29
 		if end > latest {
 			end = latest
 		}
@@ -480,6 +480,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 		if len(ms) == 0 {
 			continue
 		}
+		messageCache := newMediaResolveCache(ms)
 
 		sort.Slice(ms, func(i, j int) bool { return ms[i].ID < ms[j].ID })
 		for _, msg := range ms {
@@ -526,9 +527,9 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				const maxAttempts = 3
 				for attempt := 1; attempt <= maxAttempts; attempt++ {
 					if len(infos.RelayBotClients) > 0 {
-						err = infos.downloadMessageViaRelay(ctx, c, outputRoot, m, acct, &relayIdx)
+						err = infos.downloadMessageViaRelay(ctx, c, outputRoot, m, acct, &relayIdx, messageCache)
 					} else {
-						err = infos.downloadMessageToFile(ctx, c, c, outputRoot, m, m, acct)
+						err = infos.downloadMessageToFile(ctx, c, c, outputRoot, m, m, acct, messageCache)
 					}
 					if err == nil {
 						return
@@ -672,114 +673,4 @@ func normalizeTypeFilter(globalTypes, localTypes []string) (map[string]struct{},
 		return nil, true
 	}
 	return set, false
-}
-
-func extractMessageContent(msg telegram.NewMessage) string {
-	if msg.Message == nil {
-		return strings.TrimSpace(msg.Text())
-	}
-	for _, fieldName := range []string{"Caption"} {
-		if text := strings.TrimSpace(readStringField(msg.Message, fieldName)); text != "" {
-			return text
-		}
-	}
-	return strings.TrimSpace(msg.Text())
-}
-
-func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.Client, msg telegram.NewMessage) (string, error) {
-	if client == nil || msg.Message == nil || msg.Message.GroupedID == 0 {
-		return "", nil
-	}
-
-	ids := make([]int32, 0, 11)
-	seen := make(map[int32]struct{}, 11)
-	for offset := int32(-5); offset <= 5; offset++ {
-		id := msg.ID + offset
-		if id <= 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	if len(ids) == 0 {
-		return "", nil
-	}
-
-	ms, err := client.GetMessages(msg.ChatID(), &telegram.SearchOption{IDs: ids})
-	if err != nil {
-		return "", err
-	}
-	for _, groupMsg := range ms {
-		if groupMsg.Message == nil || groupMsg.Message.GroupedID != msg.Message.GroupedID {
-			continue
-		}
-		caption := strings.TrimSpace(extractMessageContent(groupMsg))
-		if caption != "" {
-			return caption, nil
-		}
-	}
-	return "", nil
-}
-
-func readStringField(src any, fieldName string) string {
-	v := reflect.ValueOf(src)
-	if !v.IsValid() {
-		return ""
-	}
-	if v.Kind() == reflect.Ptr {
-		if v.IsNil() {
-			return ""
-		}
-		v = v.Elem()
-	}
-	if v.Kind() != reflect.Struct {
-		return ""
-	}
-	f := v.FieldByName(fieldName)
-	if !f.IsValid() || f.Kind() != reflect.String {
-		return ""
-	}
-	return f.String()
-}
-
-func sanitizeFileName(src string) string {
-	// src = strings.TrimSpace(src)
-	src = strings.ReplaceAll(src, "/", "_")
-	src = strings.ReplaceAll(src, "\\", "_")
-	src = strings.ReplaceAll(src, ":", "_")
-	src = strings.ReplaceAll(src, "*", "_")
-	src = strings.ReplaceAll(src, "?", "_")
-	src = strings.ReplaceAll(src, "\"", "_")
-	src = strings.ReplaceAll(src, "<", "_")
-	src = strings.ReplaceAll(src, ">", "_")
-	src = strings.ReplaceAll(src, "|", "_")
-	src = strings.ReplaceAll(src, "\n", "_")
-	if src == "" {
-		return "untitled"
-	}
-	return src
-}
-
-func determineFileExtension(msg telegram.NewMessage) string {
-	// Prefer explicit file name extension when available
-	if msg.File != nil && msg.File.Name != "" {
-		if ext := filepath.Ext(msg.File.Name); ext != "" {
-			return ext
-		}
-	}
-	// Fallback by message type
-	if msg.Video() != nil {
-		return ".mp4"
-	}
-	if msg.Photo() != nil {
-		return ".jpg"
-	}
-	if msg.Document() != nil {
-		// try to use document mime/name, else generic
-		return ".bin"
-	}
-	return ".bin"
 }

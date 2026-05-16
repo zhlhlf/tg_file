@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"log"
+	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/amarnathcjd/gogram/telegram"
@@ -23,12 +25,75 @@ type mediaTargetInfo struct {
 	FinalPath   string
 }
 
+type mediaResolveCache struct {
+	mu                sync.RWMutex
+	messages          map[int32]telegram.NewMessage
+	groupCaptionByID  map[int64]string
+}
+
+func newMediaResolveCache(messages []telegram.NewMessage) *mediaResolveCache {
+	cache := &mediaResolveCache{
+		messages:         make(map[int32]telegram.NewMessage, len(messages)),
+		groupCaptionByID: make(map[int64]string),
+	}
+	for _, msg := range messages {
+		cache.storeMessage(msg)
+	}
+	return cache
+}
+
+func (c *mediaResolveCache) storeMessage(msg telegram.NewMessage) {
+	if c == nil || msg.ID == 0 {
+		return
+	}
+	c.mu.Lock()
+	c.messages[msg.ID] = msg
+	c.mu.Unlock()
+}
+
+func (c *mediaResolveCache) findCaptionByGroupedID(groupedID int64) string {
+	if c == nil || groupedID == 0 {
+		return ""
+	}
+	c.mu.RLock()
+	if caption := strings.TrimSpace(c.groupCaptionByID[groupedID]); caption != "" {
+		c.mu.RUnlock()
+		return caption
+	}
+	for _, msg := range c.messages {
+		if msg.Message == nil || msg.Message.GroupedID != groupedID {
+			continue
+		}
+		caption := strings.TrimSpace(extractMessageContent(msg))
+		if caption != "" {
+			c.mu.RUnlock()
+			c.storeGroupCaption(groupedID, caption)
+			return caption
+		}
+		}
+	c.mu.RUnlock()
+	return ""
+}
+
+func (c *mediaResolveCache) storeGroupCaption(groupedID int64, caption string) {
+	if c == nil || groupedID == 0 {
+		return
+	}
+	caption = strings.TrimSpace(caption)
+	if caption == "" {
+		return
+	}
+	c.mu.Lock()
+	c.groupCaptionByID[groupedID] = caption
+	c.mu.Unlock()
+}
+
 func buildMediaTargetPath(outputRoot, channelName string, msgTime time.Time, fileName string) string {
 	channelName = sanitizeFileName(strings.TrimSpace(channelName))
 	return filepath.Join(outputRoot, channelName, fmt.Sprintf("%04d_%02d", msgTime.Year(), msgTime.Month()), fileName)
 }
 
-func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage) (mediaTargetInfo, error) {
+func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, cache *mediaResolveCache) (mediaTargetInfo, error) {
 	info := mediaTargetInfo{}
 
 	msgTime := time.Now()
@@ -38,7 +103,7 @@ func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegr
 
 	rawText := extractMessageContent(sourceMsg)
 	if strings.TrimSpace(rawText) == "" {
-		if groupCaption, err := infos.getMediaGroupCaption(ctx, sourceClient, sourceMsg); err != nil {
+		if groupCaption, err := infos.getMediaGroupCaption(ctx, sourceClient, sourceMsg, cache); err != nil {
 			debugf("消息组 caption 获取失败: cid=%d mid=%d err=%v", sourceMsg.ChatID(), sourceMsg.ID, err)
 		} else if strings.TrimSpace(groupCaption) != "" {
 			rawText = groupCaption
@@ -104,6 +169,121 @@ func truncateRunes(src string, maxLen int) string {
 		return src
 	}
 	return string(runes[:maxLen])
+}
+
+func extractMessageContent(msg telegram.NewMessage) string {
+	if msg.Message == nil {
+		return strings.TrimSpace(msg.Text())
+	}
+	for _, fieldName := range []string{"Caption"} {
+		if text := strings.TrimSpace(readStringField(msg.Message, fieldName)); text != "" {
+			return text
+		}
+	}
+	return strings.TrimSpace(msg.Text())
+}
+
+func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.Client, msg telegram.NewMessage, cache *mediaResolveCache) (string, error) {
+	if client == nil || msg.Message == nil || msg.Message.GroupedID == 0 {
+		return "", nil
+	}
+	if caption := cache.findCaptionByGroupedID(msg.Message.GroupedID); caption != "" {
+		return caption, nil
+	}
+
+	ids := make([]int32, 0, 11)
+	seen := make(map[int32]struct{}, 11)
+	for offset := int32(-5); offset <= 5; offset++ {
+		id := msg.ID + offset
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+
+	ms, err := client.GetMessages(msg.ChatID(), &telegram.SearchOption{IDs: ids})
+	if err != nil {
+		return "", err
+	}
+	for _, groupMsg := range ms {
+		cache.storeMessage(groupMsg)
+		if groupMsg.Message == nil || groupMsg.Message.GroupedID != msg.Message.GroupedID {
+			continue
+		}
+		caption := strings.TrimSpace(extractMessageContent(groupMsg))
+		if caption != "" {
+			cache.storeGroupCaption(msg.Message.GroupedID, caption)
+			return caption, nil
+		}
+	}
+	return "", nil
+}
+
+func readStringField(src any, fieldName string) string {
+	v := reflect.ValueOf(src)
+	if !v.IsValid() {
+		return ""
+	}
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return ""
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return ""
+	}
+	f := v.FieldByName(fieldName)
+	if !f.IsValid() || f.Kind() != reflect.String {
+		return ""
+	}
+	return f.String()
+}
+
+func sanitizeFileName(src string) string {
+	// src = strings.TrimSpace(src)
+	src = strings.ReplaceAll(src, "/", "_")
+	src = strings.ReplaceAll(src, "\\", "_")
+	src = strings.ReplaceAll(src, ":", "_")
+	src = strings.ReplaceAll(src, "*", "_")
+	src = strings.ReplaceAll(src, "?", "_")
+	src = strings.ReplaceAll(src, "\"", "_")
+	src = strings.ReplaceAll(src, "<", "_")
+	src = strings.ReplaceAll(src, ">", "_")
+	src = strings.ReplaceAll(src, "|", "_")
+	src = strings.ReplaceAll(src, "\n", "_")
+	if src == "" {
+		return "untitled"
+	}
+	return src
+}
+
+func determineFileExtension(msg telegram.NewMessage) string {
+	// Prefer explicit file name extension when available
+	if msg.File != nil && msg.File.Name != "" {
+		if ext := filepath.Ext(msg.File.Name); ext != "" {
+			return ext
+		}
+	}
+	// Fallback by message type
+	if msg.Video() != nil {
+		return ".mp4"
+	}
+	if msg.Photo() != nil {
+		return ".jpg"
+	}
+	if msg.Document() != nil {
+		// try to use document mime/name, else generic
+		return ".bin"
+	}
+	return ".bin"
 }
 
 // ensureExistingMediaTarget 统一处理“本地已存在 / rclone 已存在 / 本地存在时执行 rclone”的逻辑。
