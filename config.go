@@ -63,6 +63,7 @@ type Rclone struct {
 	ConfigFile   string `yaml:"configFile,omitempty"`
 	Remote       string `yaml:"remote,omitempty"`
 	TransferMode string `yaml:"transferMode,omitempty"` // move 或 copy, 默认 move
+	RemoteExistsSleepMS int `yaml:"remoteExistsSleepMS,omitempty"` // 远端已存在并跳过时的额外休眠时间，默认 100ms
 }
 
 type DownloadChannel struct {

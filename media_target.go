@@ -92,6 +92,11 @@ func (infos *Infos) ensureExistingMediaTarget(ctx context.Context, outputRoot, f
 
 	if remoteExists {
 		log.Printf("rclone远程存在，跳过 path=%s", finalPath)
+		sleepMS := 100
+		if infos.Conf != nil && infos.Conf.Download.Rclone.RemoteExistsSleepMS > 0 {
+			sleepMS = infos.Conf.Download.Rclone.RemoteExistsSleepMS
+		}
+		time.Sleep(time.Duration(sleepMS) * time.Millisecond)
 		return true, nil
 	}
 
