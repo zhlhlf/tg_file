@@ -96,6 +96,7 @@ func (infos *Infos) ensureExistingMediaTarget(ctx context.Context, outputRoot, f
 		if infos.Conf != nil && infos.Conf.Download.Rclone.RemoteExistsSleepMS > 0 {
 			sleepMS = infos.Conf.Download.Rclone.RemoteExistsSleepMS
 		}
+		debugf("休眠 防止频繁被限制: sleep=%dms", sleepMS)
 		time.Sleep(time.Duration(sleepMS) * time.Millisecond)
 		return true, nil
 	}
