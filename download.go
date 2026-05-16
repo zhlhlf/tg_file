@@ -621,7 +621,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, client *telegram.
 				continue
 			}
 			if strings.Contains(fileNameLower, strings.ToLower(keyword)) {
-				log.Printf("命中过滤规则, 跳过下载: user=%s file=%s filter=%q", accountName, fileName, keyword)
+				log.Printf("命中过滤规则 跳过: filter=%q user=%s file=%s", keyword, accountName, fileName)
 				return nil
 			}
 		}

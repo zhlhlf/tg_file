@@ -316,35 +316,21 @@ func (infos *Infos) loadSessionsDirClients() map[string]*telegram.Client {
 
 // startBot 创建并连接 Bot 客户端, 注册消息处理器并设置命令菜单
 func (infos *Infos) startBot() (err error) {
-	botID := strconv.FormatInt(infos.BotID, 10)
-	if botID != "" && botID != "0" {
-		cleanFiles(CleanRealm{ID: botID, Cate: "bot", Realm: "cache", Filter: true})
-	}
-
 	// 创建 Bot 客户端
 	client, err := telegram.NewClient(botConf("bot"))
 	if err != nil {
-		// 清理缓存
-		cleanFiles(CleanRealm{Cate: "bot", Realm: "session"})
-		cleanFiles(CleanRealm{Cate: "bot", Realm: "cache", Filter: false})
 		log.Printf("创建 Bot 客户端失败: %+v", err)
 		return err
 	}
 
 	// 连接 Bot
 	if err = client.Connect(); err != nil {
-		// 清理缓存
-		cleanFiles(CleanRealm{Cate: "bot", Realm: "session"})
-		cleanFiles(CleanRealm{Cate: "bot", Realm: "cache", Filter: false})
 		log.Printf("Bot 连接失败: %+v", err)
 		return err
 	}
 
 	// 登录 Bot
 	if err = client.LoginBot(infos.Conf.BotToken); err != nil {
-		// 清理缓存
-		cleanFiles(CleanRealm{Cate: "bot", Realm: "session"})
-		cleanFiles(CleanRealm{Cate: "bot", Realm: "cache", Filter: false})
 		log.Printf("Bot 登录失败: %+v", err)
 		return err
 	}
@@ -487,12 +473,6 @@ func (infos *Infos) startBot() (err error) {
 
 // userBotClient 创建并连接 UserBot 客户端（不执行登录, 仅建立连接）
 func (infos *Infos) userBotClient() (err error) {
-	// 清理缓存
-	userID := strconv.FormatInt(infos.Conf.UserID, 10)
-	if userID != "" && userID != "0" {
-		cleanFiles(CleanRealm{ID: userID, Cate: "user", Realm: "cache", Filter: true})
-	}
-
 	conf := botConf("user")
 	if infos.Conf.DC != 0 {
 		conf.DataCenter = infos.Conf.DC
@@ -500,18 +480,12 @@ func (infos *Infos) userBotClient() (err error) {
 
 	client, err := telegram.NewClient(conf)
 	if err != nil {
-		// 清理缓存
-		cleanFiles(CleanRealm{Cate: "user", Realm: "session"})
-		cleanFiles(CleanRealm{Cate: "user", Realm: "cache", Filter: false})
 		log.Printf("创建 UserBot 客户端失败: %+v", err)
 		return
 	}
 
 	// 连接 UserBot
 	if err = client.Connect(); err != nil {
-		// 清理缓存
-		cleanFiles(CleanRealm{Cate: "user", Realm: "session"})
-		cleanFiles(CleanRealm{Cate: "user", Realm: "cache", Filter: false})
 		log.Printf("UserBot 连接失败: %+v", err)
 		return
 	}
@@ -702,7 +676,7 @@ func (infos *Infos) checkStatus() (err error) {
 	}
 }
 
-// resetStatus 断开 UserBot 连接并清理 session/cache, 将状态重置为未登录
+// resetStatus 断开 UserBot 连接并清理 cache, 将状态重置为未登录
 func (infos *Infos) resetStatus() {
 	// 1. 断开连接并清理句柄
 	if infos.UserClient != nil {
@@ -710,11 +684,7 @@ func (infos *Infos) resetStatus() {
 			log.Printf("UserBot 断开连接失败: %+v", err)
 		}
 	}
-	// 2. 清理磁盘上的 Session 和 Cache 文件（防止因文件损坏导致的下次循环失败）
-	cleanFiles(CleanRealm{Cate: "user", Realm: "session"})
-	cleanFiles(CleanRealm{Cate: "user", Realm: "cache", Filter: false})
-
-	// 3. 重置内存状态
+	// 2. 重置内存状态
 	infos.Mutex.Lock()
 	infos.UserClient = nil
 	infos.Status.Store(0)

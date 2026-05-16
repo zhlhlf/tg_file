@@ -130,11 +130,12 @@ func readLastLines(filePath, src string, count int) (lines []string, err error) 
 	return lines, nil
 }
 
-// cleanFiles 清理指定类型的 session 或 cache 文件
+// cleanFiles 清理指定类型的 cache 文件，session 文件保留不删除
 func cleanFiles(realm CleanRealm) {
 	switch strings.ToLower(realm.Realm) {
 	case "cache":
-		if files, err := os.ReadDir(infos.FilesPath); err == nil {
+		sessionsDir := filepath.Join(infos.FilesPath, "sessions")
+		if files, err := os.ReadDir(sessionsDir); err == nil {
 			src := fmt.Sprintf("%s_", strings.ToLower(realm.Cate))
 			for _, file := range files {
 				name := strings.TrimSpace(file.Name())
@@ -143,13 +144,13 @@ func cleanFiles(realm CleanRealm) {
 						if realm.ID != "" && realm.ID != "0" {
 							currentID := strings.TrimSuffix(strings.TrimPrefix(name, src), ".cache")
 							if currentID != realm.ID {
-								if err := os.Remove(filepath.Join(infos.FilesPath, name)); err != nil {
+								if err := os.Remove(filepath.Join(sessionsDir, name)); err != nil {
 									log.Printf("删除缓存文件失败: %v", err)
 								}
 							}
 						}
 					} else {
-						if err := os.Remove(filepath.Join(infos.FilesPath, name)); err != nil {
+						if err := os.Remove(filepath.Join(sessionsDir, name)); err != nil {
 							log.Printf("删除缓存文件失败: %v", err)
 						}
 					}
@@ -157,10 +158,24 @@ func cleanFiles(realm CleanRealm) {
 			}
 		}
 	case "session":
-		sessionsDir := filepath.Join(infos.FilesPath, "sessions")
-		name := fmt.Sprintf("%s.session", strings.ToLower(realm.Cate))
+		return
+	}
+}
+
+// cleanAllCacheFiles 在应用启动时清理 sessions 目录下所有 .cache 文件
+func cleanAllCacheFiles() {
+	sessionsDir := filepath.Join(infos.FilesPath, "sessions")
+	files, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return
+	}
+	for _, file := range files {
+		name := strings.TrimSpace(file.Name())
+		if file.IsDir() || !strings.HasSuffix(name, ".cache") {
+			continue
+		}
 		if err := os.Remove(filepath.Join(sessionsDir, name)); err != nil {
-			log.Printf("删除会话文件失败: %v", err)
+			log.Printf("删除缓存文件失败: %v", err)
 		}
 	}
 }

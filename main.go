@@ -163,6 +163,7 @@ func main() {
 	}
 	infos = value
 	offSets = newOffSets()
+	cleanAllCacheFiles()
 	if err := cleanTmpDir(); err != nil {
 		log.Printf("清理临时目录失败: %+v", err)
 		return
