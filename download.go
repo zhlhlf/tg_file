@@ -747,8 +747,16 @@ func readStringField(src any, fieldName string) string {
 
 func sanitizeFileName(src string) string {
 	// src = strings.TrimSpace(src)
+	src = strings.ReplaceAll(src, "/", "_")
+	src = strings.ReplaceAll(src, "\\", "_")
+	src = strings.ReplaceAll(src, ":", "_")
+	src = strings.ReplaceAll(src, "*", "_")
+	src = strings.ReplaceAll(src, "?", "_")
+	src = strings.ReplaceAll(src, "\"", "_")
+	src = strings.ReplaceAll(src, "<", "_")
+	src = strings.ReplaceAll(src, ">", "_")
+	src = strings.ReplaceAll(src, "|", "_")
 	src = strings.ReplaceAll(src, "\n", "_")
-	src = strings.ReplaceAll(src, "\r", "_")
 	if src == "" {
 		return "untitled"
 	}

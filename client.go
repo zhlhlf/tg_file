@@ -326,28 +326,69 @@ func (infos *Infos) startBot() (err error) {
 	relayBotTargets := make([]string, 0, len(infos.Conf.BotTokens))
 	siteConfigured := strings.TrimSpace(infos.Conf.Site) != ""
 	printedSiteSkip := false
+	type botStartupResult struct {
+		client *telegram.Client
+		me     *telegram.UserObj
+		err    error
+	}
+	results := make([]botStartupResult, len(infos.Conf.BotTokens))
+	var wg sync.WaitGroup
 	for idx, token := range infos.Conf.BotTokens {
-		client, createErr := telegram.NewClient(botConf(fmt.Sprintf("bot_%d", idx+1)))
-		if createErr != nil {
-			log.Printf("创建 Bot[%d] 客户端失败: %+v", idx+1, createErr)
-			return createErr
+		wg.Add(1)
+		go func(idx int, token string) {
+			defer wg.Done()
+
+			token = strings.TrimSpace(token)
+			sessionName := fmt.Sprintf("bot_%d", idx+1)
+			if parts := strings.SplitN(token, ":", 2); len(parts) > 0 {
+				if botID := strings.TrimSpace(parts[0]); botID != "" {
+					sessionName = fmt.Sprintf("bot_%s", botID)
+				}
+			}
+
+			client, createErr := telegram.NewClient(botConf(sessionName))
+			if createErr != nil {
+				results[idx].err = fmt.Errorf("创建 Bot[%d] 客户端失败: %w", idx+1, createErr)
+				return
+			}
+
+			if connectErr := client.Connect(); connectErr != nil {
+				results[idx].err = fmt.Errorf("Bot[%d] 连接失败: %w", idx+1, connectErr)
+				return
+			}
+
+			if loginErr := client.LoginBot(token); loginErr != nil {
+				results[idx].err = fmt.Errorf("Bot[%d] 登录失败: %w", idx+1, loginErr)
+				return
+			}
+
+			me, meErr := client.GetMe()
+			if meErr != nil {
+				results[idx].err = fmt.Errorf("获取 Bot[%d] 信息失败: %w", idx+1, meErr)
+				return
+			}
+
+			results[idx].client = client
+			results[idx].me = me
+		}(idx, token)
+	}
+	wg.Wait()
+
+	for idx, result := range results {
+		if result.err != nil {
+			for _, started := range results {
+				if started.client != nil {
+					if disconnectErr := started.client.Disconnect(); disconnectErr != nil {
+						log.Printf("Bot[%d] 回滚断开失败: %+v", idx+1, disconnectErr)
+					}
+				}
+			}
+			log.Printf("%+v", result.err)
+			return result.err
 		}
 
-		if err = client.Connect(); err != nil {
-			log.Printf("Bot[%d] 连接失败: %+v", idx+1, err)
-			return err
-		}
-
-		if err = client.LoginBot(token); err != nil {
-			log.Printf("Bot[%d] 登录失败: %+v", idx+1, err)
-			return err
-		}
-
-		me, meErr := client.GetMe()
-		if meErr != nil {
-			log.Printf("获取 Bot[%d] 信息失败: %+v", idx+1, meErr)
-			return meErr
-		}
+		client := result.client
+		me := result.me
 
 		// 始终注册入站媒体捕获器，供下载分流链路使用
 		client.On(telegram.OnMessage, handleRelayInboxCapture)
