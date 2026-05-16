@@ -183,7 +183,11 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	fileName := src.File.Name
 
 	// 创建新的 Stream 流管理对象
-	stream := newStream(r.Context(), infos.Client, src.Media(), infos.Conf.Workers, mid, cid, src.File.Size, fileName)
+	var srcPeer any
+	if src.Message != nil && src.Message.PeerID != nil {
+		srcPeer = src.Message.PeerID
+	}
+	stream := newStream(r.Context(), infos.Client, src.Media(), infos.Conf.Workers, mid, cid, src.File.Size, fileName, srcPeer)
 
 	// 唤醒TCP连接
 	if err := stream.warmConnection(stream.Ctx); err != nil {

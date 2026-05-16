@@ -102,14 +102,14 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 		return
 	}
 
-	if err := infos.preparePrivateChannelRelay(); err != nil {
-		log.Printf("私有中转频道初始化失败: %v", err)
+	if err := infos.prepareRelayBots(); err != nil {
+		log.Printf("自动下载未启动: 下载 Bot 不可用: %v", err)
 		return
 	}
 
 	log.Printf("自动下载开始执行, 频道数: %d, 输出目录: %s", len(infos.Conf.Download.Channels), outputRoot)
-	if infos.PrivateChannelID != 0 {
-		log.Printf("已启用私有中转下载: private_channel=%s cid=%d 可用Bot=%d", infos.Conf.Download.PrivateChannel, infos.PrivateChannelID, len(infos.RelayBotClients))
+	if len(infos.RelayBotClients) > 0 {
+		log.Printf("已启用 Bot 分流下载: 可用Bot=%d", len(infos.RelayBotClients))
 	}
 	infos.logDownloadMemberships(ctx)
 	// 并发控制: `concurrent` 限制同时进行的文件下载数量（不是频道）
@@ -134,7 +134,7 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 		}
 	}
 	rrIdx := 0
-	log.Printf("可用账号列表: %v", availableAccounts)
+	log.Printf("userbot可用账号列表: %v", availableAccounts)
 
 	// 自动解析缺少 ID 的频道 URL
 	for i, task := range infos.Conf.Download.Channels {
@@ -178,7 +178,6 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 					if idField.IsValid() && idField.CanInt() {
 						channelID = idField.Int()
 						infos.Conf.Download.Channels[i].ID = channelID
-						log.Printf("✅ 自动解析频道 %s 的 ID: %d", channelName, channelID)
 						// 检查所有 UserBot 是否已加入该频道（避免依赖本地 numeric ID 缓存，优先按 join 名称 ResolvePeer）
 						accountNames := make([]string, 0, len(infos.UserClients))
 						for name := range infos.UserClients {
@@ -526,7 +525,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				var err error
 				const maxAttempts = 3
 				for attempt := 1; attempt <= maxAttempts; attempt++ {
-					if infos.PrivateChannelID != 0 {
+					if len(infos.RelayBotClients) > 0 {
 						err = infos.downloadMessageViaRelay(ctx, c, outputRoot, m, acct, &relayIdx)
 					} else {
 						err = infos.downloadMessageToFile(ctx, c, c, outputRoot, m, m, acct)
@@ -535,7 +534,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 						return
 					}
 					if attempt < maxAttempts {
-						log.Printf("下载消息失败，准备重试: cid=%d mid=%d user=%s attempt=%d/%d err=%v", task.ID, m.ID, acct, attempt, maxAttempts, err)
+						debugf("下载消息失败，准备重试: cid=%d mid=%d user=%s attempt=%d/%d err=%v", task.ID, m.ID, acct, attempt, maxAttempts, err)
 						time.Sleep(time.Duration(attempt) * 2 * time.Second)
 					}
 				}
@@ -546,63 +545,38 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	return nil
 }
 
-func (infos *Infos) preparePrivateChannelRelay() error {
-	privateChannel := strings.TrimSpace(infos.Conf.Download.PrivateChannel)
-	if privateChannel == "" {
-		infos.PrivateChannelID = 0
-		infos.RelayBotClients = nil
-		infos.RelayBotLabels = nil
-		return nil
-	}
-
-	resolver := infos.UserClient
-	if resolver == nil {
-		for _, client := range infos.UserClients {
-			if client != nil {
-				resolver = client
-				break
-			}
-		}
-	}
-	if resolver == nil {
-		return fmt.Errorf("private_channel 已配置，但没有可用 UserBot 用于解析")
-	}
-
-	resolveTarget := normalizeTelegramPeerTarget(privateChannel)
-	resolvedPeer, err := resolver.ResolvePeer(resolveTarget)
-	if err != nil {
-		return fmt.Errorf("解析 private_channel 失败: target=%s err=%w", resolveTarget, err)
-	}
-	privateID, err := extractPeerID(resolvedPeer)
-	if err != nil {
-		return err
-	}
-	infos.PrivateChannelID = privateID
-
+func (infos *Infos) prepareRelayBots() error {
 	infos.RelayBotClients = nil
 	infos.RelayBotLabels = nil
-	botResolveTarget := normalizeTelegramPeerTarget(privateChannel)
+	infos.RelayBotIDs = nil
+	infos.RelayBotTargets = nil
+	availableBots := make([]string, 0, len(infos.BotClients))
+	if len(infos.BotClients) == 0 {
+		return fmt.Errorf("未配置任何 Bot")
+	}
 	for idx, client := range infos.BotClients {
 		if client == nil {
 			continue
 		}
-		botPeer, err := client.ResolvePeer(botResolveTarget)
+		me, err := client.GetMe()
 		if err != nil {
-			log.Printf("Bot[%d] 无法解析 private_channel target=%s: %v", idx+1, botResolveTarget, err)
+			log.Printf("Bot[%d] 获取自身信息失败: %v", idx+1, err)
 			continue
 		}
-		botPrivateID, err := extractPeerID(botPeer)
-		if err != nil {
-			log.Printf("Bot[%d] 无法提取 private_channel ID: %v", idx+1, err)
-			continue
-		}
-		log.Printf("Bot[%d] 已解析 private_channel cid=%d", idx+1, botPrivateID)
 		infos.RelayBotClients = append(infos.RelayBotClients, client)
 		infos.RelayBotLabels = append(infos.RelayBotLabels, fmt.Sprintf("bot%d", idx+1))
+		infos.RelayBotIDs = append(infos.RelayBotIDs, me.ID)
+		target := ""
+		if me.Username != "" {
+			target = "@" + me.Username
+		}
+		infos.RelayBotTargets = append(infos.RelayBotTargets, target)
+		availableBots = append(availableBots, me.Username)
 	}
 	if len(infos.RelayBotClients) == 0 {
-		return fmt.Errorf("private_channel 已配置，但没有任何 Bot 可访问该频道")
+		return fmt.Errorf("没有任何可用 Bot 用于分流下载")
 	}
+	log.Printf("可用bot列表: [%s]", strings.Join(availableBots, ","))
 	return nil
 }
 
@@ -626,37 +600,322 @@ func extractPeerID(peer any) (int64, error) {
 	return 0, fmt.Errorf("无法从 peer 中提取 ID: %T", peer)
 }
 
-func (infos *Infos) pickRelayBot(counter *uint64) (*telegram.Client, string, error) {
+func (infos *Infos) pickRelayBot(counter *uint64) (*telegram.Client, string, int64, string, error) {
 	if len(infos.RelayBotClients) == 0 {
-		return nil, "", fmt.Errorf("没有可用的中转下载 Bot")
+		return nil, "", 0, "", fmt.Errorf("没有可用的分流下载 Bot")
 	}
 	idx := int(atomic.AddUint64(counter, 1)-1) % len(infos.RelayBotClients)
-	return infos.RelayBotClients[idx], infos.RelayBotLabels[idx], nil
+	return infos.RelayBotClients[idx], infos.RelayBotLabels[idx], infos.RelayBotIDs[idx], infos.RelayBotTargets[idx], nil
+}
+
+func (infos *Infos) shouldSkipByFileName(fileName, accountName string) bool {
+	if infos == nil || infos.Conf == nil {
+		return false
+	}
+	fileNameLower := strings.ToLower(fileName)
+	for _, rawKeyword := range infos.Conf.Download.SkipNameContains {
+		keyword := strings.TrimSpace(rawKeyword)
+		if keyword == "" {
+			continue
+		}
+		if strings.Contains(fileNameLower, strings.ToLower(keyword)) {
+			log.Printf("命中过滤规则 跳过: filter=%q user=%s file=%s", keyword, accountName, fileName)
+			return true
+		}
+	}
+	return false
+}
+
+// 复用“已存在”检测：同时检查本地文件与远端 rclone 是否存在。
+// 返回值: localExists, remoteExists, err(仅 rclone 检查错误)
+func (infos *Infos) checkExistingLocalOrRemote(ctx context.Context, outputRoot, finalPath string) (bool, bool, error) {
+	localExists := false
+	if _, statErr := os.Stat(finalPath); statErr == nil {
+		localExists = true
+		// 本地已存在时直接返回，避免额外的远端检查开销
+		return true, false, nil
+	}
+
+	remoteExists := false
+	if infos != nil && infos.Conf != nil && infos.Conf.Download.Rclone.Enabled {
+		exists, err := infos.rcloneFileExists(ctx, outputRoot, finalPath)
+		if err != nil {
+			return localExists, false, err
+		}
+		remoteExists = exists
+	}
+
+	return localExists, remoteExists, nil
+}
+
+func relayInboxKey(botID, senderID int64) string {
+	return fmt.Sprintf("%d:%d", botID, senderID)
+}
+
+func (infos *Infos) cacheRelayInboxMedia(botID, senderID int64, msg telegram.NewMessage) {
+	if infos == nil || botID == 0 || senderID == 0 {
+		return
+	}
+	if !msg.IsMedia() || msg.Media() == nil || msg.File == nil {
+		return
+	}
+	receivedAt := time.Now().Unix()
+	if msg.Message != nil && msg.Message.Date != 0 {
+		receivedAt = int64(msg.Message.Date)
+	}
+	infos.Mutex.Lock()
+	if infos.RelayInbox == nil {
+		infos.RelayInbox = make(map[string]RelayInboxRecord, 16)
+	}
+	infos.RelayInbox[relayInboxKey(botID, senderID)] = RelayInboxRecord{Msg: msg, ReceivedAt: receivedAt}
+	infos.Mutex.Unlock()
+}
+
+func (infos *Infos) getRelayInboxMedia(botID, senderID, minUnix int64) (telegram.NewMessage, bool) {
+	if infos == nil || botID == 0 || senderID == 0 {
+		return telegram.NewMessage{}, false
+	}
+	infos.Mutex.RLock()
+	rec, ok := infos.RelayInbox[relayInboxKey(botID, senderID)]
+	infos.Mutex.RUnlock()
+	if !ok {
+		return telegram.NewMessage{}, false
+	}
+	if minUnix > 0 && rec.ReceivedAt < minUnix {
+		return telegram.NewMessage{}, false
+	}
+	if !rec.Msg.IsMedia() || rec.Msg.Media() == nil || rec.Msg.File == nil {
+		return telegram.NewMessage{}, false
+	}
+	return rec.Msg, true
+}
+
+func previewFirstBytes(v any, limit int) (text string, hex string, total int) {
+	if limit <= 0 {
+		limit = 200
+	}
+	raw := []byte(fmt.Sprintf("%#v", v))
+	total = len(raw)
+	if len(raw) > limit {
+		raw = raw[:limit]
+	}
+	return string(raw), fmt.Sprintf("%x", raw), total
+}
+
+func formatRate(bytesPerSec float64) string {
+	if bytesPerSec < 0 {
+		bytesPerSec = 0
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	idx := 0
+	for bytesPerSec >= 1024 && idx < len(units)-1 {
+		bytesPerSec /= 1024
+		idx++
+	}
+	if idx == 0 {
+		return fmt.Sprintf("%.0f%s", bytesPerSec, units[idx])
+	}
+	return fmt.Sprintf("%.2f%s", bytesPerSec, units[idx])
 }
 
 func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, userAccount string, counter *uint64) error {
-	relayForwarded, err := userClient.Forward(infos.PrivateChannelID, sourceMsg.Peer, []int32{sourceMsg.ID}, &telegram.ForwardOptions{HideAuthor: true})
-	if err != nil {
-		return fmt.Errorf("转发到 private_channel 失败: %w", err)
-	}
-	if len(relayForwarded) == 0 {
-		return fmt.Errorf("转发到 private_channel 后未返回消息")
-	}
-
-	relayBot, relayLabel, err := infos.pickRelayBot(counter)
+	relayBot, relayLabel, relayBotID, relayTarget, err := infos.pickRelayBot(counter)
 	if err != nil {
 		return err
 	}
-	relayMsgID := relayForwarded[0].ID
-	relayTarget := normalizeTelegramPeerTarget(infos.Conf.Download.PrivateChannel)
-	relayMessages, err := relayBot.GetMessages(relayTarget, &telegram.SearchOption{IDs: []int32{relayMsgID}})
+	if !sourceMsg.IsMedia() || sourceMsg.Media() == nil {
+		return fmt.Errorf("源消息不包含可发送媒体: cid=%d mid=%d", sourceMsg.ChatID(), sourceMsg.ID)
+	}
+
+	refreshedMsg := sourceMsg
+	refreshedMessages, refreshErr := userClient.GetMessages(sourceMsg.ChatID(), &telegram.SearchOption{IDs: []int32{sourceMsg.ID}})
+	if refreshErr != nil {
+		return fmt.Errorf("刷新源消息失败: cid=%d mid=%d err=%w", sourceMsg.ChatID(), sourceMsg.ID, refreshErr)
+	}
+	if len(refreshedMessages) == 0 {
+		return fmt.Errorf("刷新源消息为空: cid=%d mid=%d", sourceMsg.ChatID(), sourceMsg.ID)
+	}
+	refreshedMsg = refreshedMessages[0]
+	if !refreshedMsg.IsMedia() || refreshedMsg.Media() == nil {
+		return fmt.Errorf("刷新后的源消息不包含媒体: cid=%d mid=%d", refreshedMsg.ChatID(), refreshedMsg.ID)
+	}
+
+	// 先走过滤再发送到 Bot 私聊
+	preRawText := extractMessageContent(refreshedMsg)
+	if strings.TrimSpace(preRawText) == "" {
+		if groupCaption, captionErr := infos.getMediaGroupCaption(ctx, userClient, refreshedMsg); captionErr == nil && strings.TrimSpace(groupCaption) != "" {
+			preRawText = groupCaption
+		}
+	}
+	preContent := sanitizeFileName(strings.TrimSpace(preRawText))
+	preExt := determineFileExtension(refreshedMsg)
+	preFileName := fmt.Sprintf("%d%s", refreshedMsg.ID, preExt)
+	if preContent != "" {
+		preFileName = fmt.Sprintf("%d - %s%s", refreshedMsg.ID, preContent, preExt)
+	}
+	if infos.shouldSkipByFileName(preFileName, userAccount+"->"+relayLabel) {
+		return nil
+	}
+
+	// 在发送给 Bot 前先检查目标文件是否已存在（本地或 rclone）
+	msgTime := time.Now()
+	if refreshedMsg.Message != nil && refreshedMsg.Message.Date != 0 {
+		msgTime = time.Unix(int64(refreshedMsg.Message.Date), 0)
+	}
+	channelName := strings.TrimSpace(refreshedMsg.Channel.Title)
+	if channelName == "" {
+		channelName = strconv.FormatInt(refreshedMsg.ChatID(), 10)
+	}
+	preFinalPath := buildMediaTargetPath(outputRoot, channelName, msgTime, preFileName)
+	if handled, err := infos.ensureExistingMediaTarget(ctx, outputRoot, preFinalPath); err != nil {
+		return err
+	} else if handled {
+		return nil
+	}
+
+	forwardTarget := any(relayBotID)
+	if relayTarget != "" {
+		resolvedPeer, resolveErr := userClient.ResolvePeer(relayTarget)
+		if resolveErr != nil {
+			return fmt.Errorf("解析 Bot 私聊目标失败: bot=%s target=%s err=%w", relayLabel, relayTarget, resolveErr)
+		}
+		forwardTarget = resolvedPeer
+	}
+
+	// 按用户要求改为“直接发送文件到 Bot 私聊”（非 Forward），避免转发壳消息导致引用刷新失败
+	relaySent, err := userClient.SendMedia(forwardTarget, refreshedMsg.Media(), &telegram.MediaOptions{Caption: extractMessageContent(refreshedMsg)})
 	if err != nil {
-		return fmt.Errorf("Bot 获取中转消息失败: bot=%s mid=%d err=%w", relayLabel, relayMsgID, err)
+		return fmt.Errorf("发送媒体到 Bot 私聊失败: bot=%s target=%v err=%w", relayLabel, forwardTarget, err)
 	}
-	if len(relayMessages) == 0 {
-		return fmt.Errorf("Bot 未获取到中转消息: bot=%s mid=%d", relayLabel, relayMsgID)
+	if relaySent == nil || relaySent.Message == nil {
+		return fmt.Errorf("发送媒体到 Bot 私聊后返回消息为空: bot=%s target=%v", relayLabel, forwardTarget)
 	}
-	return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, sourceMsg, relayMessages[0], userAccount+"->"+relayLabel)
+	debugf("Send返回媒体状态: bot=%s mid=%d isMedia=%v fileNil=%v mediaType=%T", relayLabel, relaySent.ID, relaySent.IsMedia(), relaySent.File == nil, relaySent.Media())
+
+	// Bot 侧会话 peer 应该是当前 UserBot（发送者）
+	senderID := int64(0)
+	mappedID := int64(0)
+	if me, meErr := userClient.GetMe(); meErr == nil && me != nil {
+		senderID = me.ID
+	}
+	if infos != nil && infos.UserClientIDs != nil {
+		if mid := infos.UserClientIDs[userAccount]; mid != 0 {
+			mappedID = mid
+			if senderID == 0 || senderID == relayBotID {
+				senderID = mid
+			}
+		}
+	}
+	if relaySent.Message != nil && relaySent.Message.FromID != nil {
+		if uid, uidErr := extractPeerID(relaySent.Message.FromID); uidErr == nil && uid != 0 {
+			if senderID == 0 || senderID == relayBotID {
+				senderID = uid
+			}
+		}
+	}
+	if senderID == 0 {
+		return fmt.Errorf("无法确定 Bot 端会话 peer: bot=%s mid=%d", relayLabel, relaySent.ID)
+	}
+	if senderID == relayBotID {
+		return fmt.Errorf("检测到异常会话ID（与 Bot 自身相同）: bot=%s senderID=%d user=%s mid=%d", relayLabel, senderID, userAccount, relaySent.ID)
+	}
+	botPeer := &telegram.PeerUser{UserID: senderID}
+	debugf("Bot 拉取消息使用会话: bot=%s user=%s senderID=%d mappedID=%d botID=%d mid=%d", relayLabel, userAccount, senderID, mappedID, relayBotID, relaySent.ID)
+	approxSendUnix := time.Now().Unix()
+	if relaySent.Message != nil && relaySent.Message.Date != 0 {
+		approxSendUnix = int64(relaySent.Message.Date)
+	}
+
+	// 轮询几次等待 Bot 端消息稳定为媒体，再开始下载
+	for i := 1; i <= 6; i++ {
+		if cachedMsg, ok := infos.getRelayInboxMedia(relayBotID, senderID, approxSendUnix-5); ok {
+			debugf("命中 Bot 入站媒体缓存: bot=%s senderID=%d mid=%d attempt=%d", relayLabel, senderID, cachedMsg.ID, i)
+			cachedMsg.Client = relayBot
+			return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, cachedMsg, userAccount+"->"+relayLabel)
+		}
+
+		botMsgs, berr := relayBot.GetMessages(botPeer, &telegram.SearchOption{IDs: []int32{relaySent.ID}})
+		if berr == nil && len(botMsgs) > 0 {
+			debugf("Bot按ID消息状态: bot=%s mid=%d attempt=%d isMedia=%v fileNil=%v mediaType=%T", relayLabel, botMsgs[0].ID, i, botMsgs[0].IsMedia(), botMsgs[0].File == nil, botMsgs[0].Media())
+			if botMsgs[0].IsMedia() && botMsgs[0].Media() != nil && botMsgs[0].File != nil {
+				debugf("从 Bot 端获取到媒体引用（按ID）: bot=%s mid=%d attempt=%d", relayLabel, botMsgs[0].ID, i)
+				botMsg := botMsgs[0]
+				botMsg.Client = relayBot
+				return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, botMsg, userAccount+"->"+relayLabel)
+			}
+			mediaType := "<nil>"
+			if botMsgs[0].Message != nil && botMsgs[0].Message.Media != nil {
+				mediaType = fmt.Sprintf("%T", botMsgs[0].Message.Media)
+			}
+			debugf("Bot 端拉取消息但未包含媒体: bot=%s mid=%d attempt=%d mediaType=%s", relayLabel, relaySent.ID, i, mediaType)
+		} else if berr != nil {
+			debugf("从 Bot 端按ID拉取消息失败: bot=%s mid=%d attempt=%d err=%v", relayLabel, relaySent.ID, i, berr)
+			if strings.Contains(strings.ToLower(berr.Error()), "missing from cache") {
+				_, _ = relayBot.GetDialogs(&telegram.DialogOptions{Limit: 50})
+				debugf("Bot 对话缓存预热完成: bot=%s mid=%d attempt=%d", relayLabel, relaySent.ID, i)
+			}
+		}
+
+		// 某些场景下按 ID 取不到媒体，退化为拉取最近消息窗口，按发送者+时间匹配
+		recentMsgs, rerr := relayBot.GetMessages(botPeer, &telegram.SearchOption{Limit: 50})
+		if rerr == nil && len(recentMsgs) > 0 {
+			var candidate *telegram.NewMessage
+			for idx := range recentMsgs {
+				m := recentMsgs[idx]
+				if m.ID == relaySent.ID && m.IsMedia() && m.Media() != nil && m.File != nil {
+					candidate = &m
+					break
+				}
+			}
+			if candidate == nil {
+				for idx := range recentMsgs {
+					m := recentMsgs[idx]
+					if !m.IsMedia() || m.Media() == nil || m.File == nil {
+						continue
+					}
+					if senderID != 0 && m.SenderID() != 0 && m.SenderID() != senderID {
+						continue
+					}
+					if m.Message != nil && m.Message.Date != 0 {
+						delta := int64(m.Message.Date) - approxSendUnix
+						if delta < 0 {
+							delta = -delta
+						}
+						if delta > 180 {
+							continue
+						}
+					}
+					if m.ID >= relaySent.ID-20 && m.ID <= relaySent.ID+20 {
+						candidate = &m
+						break
+					}
+				}
+			}
+			if candidate == nil {
+				for idx := range recentMsgs {
+					m := recentMsgs[idx]
+					if !m.IsMedia() || m.Media() == nil || m.File == nil {
+						continue
+					}
+					if senderID != 0 && m.SenderID() != 0 && m.SenderID() != senderID {
+						continue
+					}
+					candidate = &m
+					break
+				}
+			}
+			if candidate != nil {
+				debugf("从 Bot 最近消息窗口匹配到媒体: bot=%s wantedMid=%d gotMid=%d sender=%d attempt=%d", relayLabel, relaySent.ID, candidate.ID, candidate.SenderID(), i)
+				candidate.Client = relayBot
+				return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, *candidate, userAccount+"->"+relayLabel)
+			}
+			debugf("Bot 最近消息窗口未匹配到媒体: bot=%s wantedMid=%d attempt=%d count=%d", relayLabel, relaySent.ID, i, len(recentMsgs))
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// 不再回退到 user 视角消息对象（该对象的 peer 对 Bot 侧 refresh 不可靠）
+	return fmt.Errorf("Bot 端消息未稳定为媒体，放弃本次并由上层重试: bot=%s mid=%d", relayLabel, relaySent.ID)
 }
 
 func (infos *Infos) logDownloadMemberships(ctx context.Context) {
@@ -747,32 +1006,20 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 	if channelName == "" {
 		channelName = strconv.FormatInt(sourceMsg.ChatID(), 10)
 	}
-	channelName = sanitizeFileName(channelName)
 
 	content := strings.TrimSpace(rawText)
 	hasContent := content != ""
 	content = sanitizeFileName(content)
 
 	ext := determineFileExtension(sourceMsg)
-	dir := filepath.Join(outputRoot, channelName, fmt.Sprintf("%04d_%02d", msgTime.Year(), msgTime.Month()))
 	fileName := fmt.Sprintf("%d%s", sourceMsg.ID, ext)
 	if hasContent && content != "" {
 		fileName = fmt.Sprintf("%d - %s%s", sourceMsg.ID, content, ext)
 	}
-	if infos != nil && infos.Conf != nil {
-		fileNameLower := strings.ToLower(fileName)
-		for _, rawKeyword := range infos.Conf.Download.SkipNameContains {
-			keyword := strings.TrimSpace(rawKeyword)
-			if keyword == "" {
-				continue
-			}
-			if strings.Contains(fileNameLower, strings.ToLower(keyword)) {
-				log.Printf("命中过滤规则 跳过: filter=%q user=%s file=%s", keyword, accountName, fileName)
-				return nil
-			}
-		}
+	if infos.shouldSkipByFileName(fileName, accountName) {
+		return nil
 	}
-	finalPath := filepath.Join(dir, fileName)
+	finalPath := buildMediaTargetPath(outputRoot, channelName, msgTime, fileName)
 	displayLocalPath := func(path string) string {
 		cleanPath := filepath.Clean(path)
 		cleanRoot := filepath.Clean(outputRoot)
@@ -792,27 +1039,10 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 		} else {
 			debugf("检查文件是否存在: path=%s", displayLocalPath(finalPath))
 		}
-		if exists, err := infos.rcloneFileExists(ctx, outputRoot, finalPath); err != nil {
-			log.Printf("rclone 文件检查失败: path=%s err=%v", displayLocalPath(finalPath), err)
-		} else if exists {
-			log.Printf("rclone中存在, 跳过: path=%s", displayLocalPath(finalPath))
-			return nil
-		}
 	}
-	if _, err := os.Stat(finalPath); err == nil {
-		if infos != nil && infos.Conf != nil && infos.Conf.Download.Rclone.Enabled {
-			remotePath, rcloneErr := infos.rcloneRemotePath(outputRoot, finalPath)
-			if rcloneErr != nil {
-				return rcloneErr
-			}
-			mode := infos.rcloneTransferMode()
-			log.Printf("本地文件已存在，执行 rclone %s: user=%s path=%s", mode, accountName, displayLocalPath(finalPath))
-			if rcloneErr := infos.rcloneTransferFile(ctx, finalPath, remotePath, mode); rcloneErr != nil {
-				return rcloneErr
-			}
-			log.Printf("下载完成: %s", displayLocalPath(finalPath))
-			log.Printf("rclone %s 完成: %s", mode, displayLocalPath(finalPath))
-		}
+	if handled, err := infos.ensureExistingMediaTarget(ctx, outputRoot, finalPath); err != nil {
+		return err
+	} else if handled {
 		return nil
 	}
 
@@ -853,7 +1083,14 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 	if workers <= 0 {
 		workers = 1
 	}
-	stream := newStream(fileCtx, downloadClient, downloadMsg.Media(), workers, downloadMsg.ID, downloadMsg.ChatID(), downloadMsg.File.Size, downloadMsg.File.Name)
+	if downloadMsg.File == nil || downloadMsg.Media() == nil {
+		return fmt.Errorf("下载消息缺少文件信息: sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
+	}
+	var downloadPeer any
+	if downloadMsg.Message != nil && downloadMsg.Message.PeerID != nil {
+		downloadPeer = downloadMsg.Message.PeerID
+	}
+	stream := newStream(fileCtx, downloadClient, downloadMsg.Media(), workers, downloadMsg.ID, downloadMsg.ChatID(), downloadMsg.File.Size, downloadMsg.File.Name, downloadPeer)
 	if err := stream.warmConnection(fileCtx); err != nil {
 		_ = f.Close()
 		return err
@@ -867,9 +1104,11 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 	timer := time.NewTimer(120 * time.Second)
 	defer timer.Stop()
 
-	// 统计写入速度, 每秒输出一次 (仅 debug 模式)
+	// 统计写入速度：按真实时间间隔计算当前速率，并附带平均速率 (仅 debug 模式)
 	var totalWritten int64
 	lastWritten := int64(0)
+	lastSpeedAt := time.Now()
+	startedAt := lastSpeedAt
 	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
 
@@ -879,9 +1118,20 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 			return fileCtx.Err()
 		case <-tick.C:
 			if infos != nil && infos.Conf != nil && infos.Conf.Debug {
-				delta := totalWritten - lastWritten
+				now := time.Now()
+				deltaBytes := totalWritten - lastWritten
+				deltaSec := now.Sub(lastSpeedAt).Seconds()
+				if deltaSec > 0 {
+					curRate := float64(deltaBytes) / deltaSec
+					avgSec := now.Sub(startedAt).Seconds()
+					avgRate := 0.0
+					if avgSec > 0 {
+						avgRate = float64(totalWritten) / avgSec
+					}
+					debugf("下载速度: cid=%d mid=%d cur=%s/s avg=%s/s (written=%d)", downloadMsg.ChatID(), downloadMsg.ID, formatRate(curRate), formatRate(avgRate), totalWritten)
+				}
 				lastWritten = totalWritten
-				debugf("下载速度: cid=%d mid=%d %s/s (written=%d)", downloadMsg.ChatID(), downloadMsg.ID, humanizeBytes(delta), totalWritten)
+				lastSpeedAt = now
 			}
 		case task := <-stream.Tasks:
 			if task == nil {
@@ -902,6 +1152,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 			totalWritten += int64(n)
 
 			if task.ContentEnd >= downloadMsg.File.Size-1 {
+				dir := filepath.Dir(finalPath)
 				// flush and close before verification
 				if err := f.Sync(); err != nil {
 					debugf("文件同步失败: %v", err)

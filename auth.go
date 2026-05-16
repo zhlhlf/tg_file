@@ -65,6 +65,53 @@ func (infos *Infos) isWhite(id int64) bool {
 	return false
 }
 
+func (infos *Infos) isInternalUserBot(id int64) bool {
+	if id == 0 {
+		return false
+	}
+	infos.Mutex.RLock()
+	defer infos.Mutex.RUnlock()
+	for _, userID := range infos.UserClientIDs {
+		if userID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (infos *Infos) firstInternalUserBotID() int64 {
+	infos.Mutex.RLock()
+	defer infos.Mutex.RUnlock()
+	for _, userID := range infos.UserClientIDs {
+		if userID != 0 {
+			return userID
+		}
+	}
+	return 0
+}
+
+func (infos *Infos) notificationTargetID() int64 {
+	if infos == nil {
+		return 0
+	}
+	targetID := infos.Conf.UserID
+	if targetID != 0 {
+		if _, ok := infos.BotIDs[targetID]; !ok {
+			return targetID
+		}
+		debugf("通知目标 userID=%d 是 Bot，改用首个 UserBot", targetID)
+	}
+	targetID = infos.firstInternalUserBotID()
+	if targetID != 0 {
+		return targetID
+	}
+	return 0
+}
+
+func (infos *Infos) isAllowedBotSender(id int64) bool {
+	return infos.isWhite(id) || infos.isInternalUserBot(id)
+}
+
 // calculateHash 为指定用户 ID 生成 6 位 MD5 哈希, 用于鉴权
 func (infos *Infos) calculateHash(userID int64) string {
 	if infos.Conf.Password == "" {

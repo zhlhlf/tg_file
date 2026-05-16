@@ -79,14 +79,22 @@ type ID struct {
 	IsWhite bool
 }
 
+type RelayInboxRecord struct {
+	Msg        telegram.NewMessage
+	ReceivedAt int64
+}
+
 // Infos 结构体保存了程序运行时的全局状态和资源句柄
 type Infos struct {
 	BotClient       *telegram.Client            // 主 Bot 客户端（用于与用户交互）
 	BotClients      []*telegram.Client          // 多 Bot 客户端实例
-	RelayBotClients []*telegram.Client          // 可用于私有中转频道下载的 Bot 列表
+	RelayBotClients []*telegram.Client          // 可用于分流下载的 Bot 列表
 	RelayBotLabels  []string                    // 与 RelayBotClients 对应的显示名称
+	RelayBotIDs     []int64                     // 与 RelayBotClients 对应的 Bot 用户 ID
+	RelayBotTargets []string                    // 与 RelayBotClients 对应的可解析目标（优先 @username）
 	UserClient      *telegram.Client            // 全局 UserBot 客户端实例（用于读取私有内容和流式传输）
 	UserClients     map[string]*telegram.Client // 多 UserBot 客户端实例
+	UserClientIDs   map[string]int64            // UserBot 名称到用户 ID 的映射
 	DefaultUserName string                      // 默认 UserBot 名称
 	Client          *telegram.Client            // 当前活跃客户端指针
 	Mutex           *sync.RWMutex               // 全局互斥锁, 保护并发安全
@@ -108,7 +116,7 @@ type Infos struct {
 	TailCache       map[string]*MediaCache      // 缓存文件尾部数据
 	DownloadStarted atomic.Bool                 // 自动下载任务是否已启动
 	LastDownloaded  map[int64]int32             // 每个频道已下载到的最新消息ID
-	PrivateChannelID int64                      // 私有中转频道 ID
+	RelayInbox      map[string]RelayInboxRecord // Bot 入站媒体缓存: key=botID:senderID
 }
 
 type colorizedWriter struct {
@@ -290,12 +298,8 @@ func main() {
 		log.Printf("port=0，跳过 HTTP 服务监听")
 	}
 
-	// 8. 发送程序启动通知（仅在已配置管理员 userID 时发送）
-	if infos.Conf.UserID != 0 {
-		sendMS(nil, "程序已启动", nil, 60)
-	} else {
-		log.Printf("程序已启动；当前未配置 userID，因此不发送启动通知")
-	}
+	// 8. 发送程序启动通知（优先发给 userID，未配置时默认发给第一个 Bot）
+	sendMS(nil, "程序已启动 by jczhl", nil, 60)
 
 	// 阻塞等待直到接收到退出信号
 	status := <-statusChan
@@ -311,9 +315,7 @@ func main() {
 			log.Printf("HTTP 服务已优雅关闭")
 		}
 	}
-	if infos.Conf.UserID != 0 {
-		sendMS(nil, "程序已退出", nil, 60)
-	}
+	sendMS(nil, "程序已退出 by jczhl", nil, 60)
 }
 
 // newInfos 初始化全局 Infos 对象, 加载日志和配置
@@ -329,7 +331,9 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 		BotIDs:      make(map[int64]struct{}, 2),
 		HeadCache:   make(map[string]*MediaCache, 4),
 		TailCache:   make(map[string]*MediaCache, 4),
+		RelayInbox:  make(map[string]RelayInboxRecord, 16),
 		UserClients: make(map[string]*telegram.Client, 2),
+		UserClientIDs: make(map[string]int64, 2),
 		Rex:         regexp.MustCompile(`(?i)(?:FLOOD(?:_PREMIUM)?_WAIT_(\d+)|WAIT(?:\s+OF)?\s*(\d+))`),
 	}
 	stdoutWriter := colorizedWriter{w: os.Stdout, prefix: "\x1b[32m", suffix: "\x1b[0m"}

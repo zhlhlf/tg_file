@@ -162,10 +162,6 @@ func (infos *Infos) initUserClientsForDownloadOnly() error {
 	}
 	infos.Mutex.Unlock()
 
-	if strings.TrimSpace(infos.Conf.Download.PrivateChannel) != "" {
-		log.Printf("private_channel 模式已启用，仅初始化第一个 UserBot: %s", accounts[0].Name)
-	}
-
 	var wg sync.WaitGroup
 	var failMutex sync.Mutex
 	failCount := 0
@@ -236,13 +232,13 @@ func (infos *Infos) initUserClientsForDownloadOnly() error {
 
 			infos.Mutex.Lock()
 			infos.UserClients[account.Name] = client
+			infos.UserClientIDs[account.Name] = me.ID
 			if infos.DefaultUserName == "" {
 				infos.DefaultUserName = account.Name
 				infos.UserClient = client
 			}
 			infos.Mutex.Unlock()
 
-			log.Printf("UserBot[%s] 就绪: uid=%d", account.Name, me.ID)
 		}(idx, account)
 	}
 	wg.Wait()
@@ -307,6 +303,10 @@ func (infos *Infos) loadSessionsDirClients() map[string]*telegram.Client {
 			infos.UserClients = make(map[string]*telegram.Client)
 		}
 		infos.UserClients[tag] = client
+		if infos.UserClientIDs == nil {
+			infos.UserClientIDs = make(map[string]int64)
+		}
+		infos.UserClientIDs[tag] = me.ID
 		if infos.DefaultUserName == "" {
 			infos.DefaultUserName = tag
 			infos.UserClient = client
@@ -321,6 +321,11 @@ func (infos *Infos) loadSessionsDirClients() map[string]*telegram.Client {
 // startBot 创建并连接所有 Bot 客户端, 注册消息处理器并设置命令菜单
 func (infos *Infos) startBot() (err error) {
 	clients := make([]*telegram.Client, 0, len(infos.Conf.BotTokens))
+	relayBotIDs := make([]int64, 0, len(infos.Conf.BotTokens))
+	relayBotLabels := make([]string, 0, len(infos.Conf.BotTokens))
+	relayBotTargets := make([]string, 0, len(infos.Conf.BotTokens))
+	siteConfigured := strings.TrimSpace(infos.Conf.Site) != ""
+	printedSiteSkip := false
 	for idx, token := range infos.Conf.BotTokens {
 		client, createErr := telegram.NewClient(botConf(fmt.Sprintf("bot_%d", idx+1)))
 		if createErr != nil {
@@ -338,14 +343,39 @@ func (infos *Infos) startBot() (err error) {
 			return err
 		}
 
-		client.On(telegram.OnMessage, handleBotCommand)
-		infos.setupBotCommands(client)
+		me, meErr := client.GetMe()
+		if meErr != nil {
+			log.Printf("获取 Bot[%d] 信息失败: %+v", idx+1, meErr)
+			return meErr
+		}
+
+		// 始终注册入站媒体捕获器，供下载分流链路使用
+		client.On(telegram.OnMessage, handleRelayInboxCapture)
+
+		// 仅第一个 Bot 负责消息监听与命令注册
+		if idx == 0 && siteConfigured {
+			client.On(telegram.OnMessage, handleBotCommand)
+			infos.setupBotCommands(client)
+		} else if idx == 0 && !siteConfigured && !printedSiteSkip {
+			log.Printf("未配置 site，跳过消息监听与命令注册")
+			printedSiteSkip = true
+		}
 		clients = append(clients, client)
-		log.Printf("Bot[%d] 启动成功", idx+1)
+		relayBotIDs = append(relayBotIDs, me.ID)
+		relayBotLabels = append(relayBotLabels, fmt.Sprintf("bot%d", idx+1))
+		if me.Username != "" {
+			relayBotTargets = append(relayBotTargets, "@"+me.Username)
+		} else {
+			relayBotTargets = append(relayBotTargets, "")
+		}
 	}
 
 	infos.Mutex.Lock()
 	infos.BotClients = clients
+	infos.RelayBotClients = clients
+	infos.RelayBotIDs = relayBotIDs
+	infos.RelayBotLabels = relayBotLabels
+	infos.RelayBotTargets = relayBotTargets
 	if len(clients) > 0 {
 		infos.BotClient = clients[0]
 	}

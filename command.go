@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -12,6 +13,36 @@ import (
 
 	"github.com/amarnathcjd/gogram/telegram"
 )
+
+func handleRelayInboxCapture(m *telegram.NewMessage) error {
+	if m == nil || infos == nil {
+		return nil
+	}
+	if !m.IsMedia() || m.Media() == nil || m.File == nil {
+		return nil
+	}
+	senderID := m.SenderID()
+	if senderID == 0 || !infos.isInternalUserBot(senderID) {
+		return nil
+	}
+
+	botID := int64(0)
+	infos.Mutex.RLock()
+	for idx, c := range infos.RelayBotClients {
+		if c == m.Client && idx < len(infos.RelayBotIDs) {
+			botID = infos.RelayBotIDs[idx]
+			break
+		}
+	}
+	infos.Mutex.RUnlock()
+	if botID == 0 {
+		return nil
+	}
+
+	infos.cacheRelayInboxMedia(botID, senderID, *m)
+	debugf("缓存 Bot 入站媒体: botID=%d senderID=%d mid=%d file=%s", botID, senderID, m.ID, m.File.Name)
+	return nil
+}
 
 // handleBotCommand 是 Bot 的总消息分发入口，处理所有管理指令
 func handleBotCommand(m *telegram.NewMessage) error {
@@ -52,7 +83,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 	if m.Channel == nil {
 		switch {
 		case strings.HasPrefix(text, "/start"):
-			if !infos.isWhite(m.SenderID()) {
+			if !infos.isAllowedBotSender(m.SenderID()) {
 				sendMS(m, "你没有使用此机器人的权限", nil, 60)
 				return nil
 			}
@@ -664,7 +695,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			sendMS(m, "未找到该规则", nil, 60)
 			return nil
 		default:
-			if !infos.isWhite(m.SenderID()) && m.SenderID() != 0 {
+			if !infos.isAllowedBotSender(m.SenderID()) && m.SenderID() != 0 {
 				sendMS(m, "你没有使用此机器人的权限", nil, 60)
 				return nil
 			}
@@ -678,6 +709,9 @@ func handleBotCommand(m *telegram.NewMessage) error {
 func handleMess(m *telegram.NewMessage) error {
 	// 如果是用户发送或转发来的、带有图片/文档/视频的消息，直接生成直链
 	if m.IsMedia() && (m.Photo() != nil || m.Document() != nil || m.Video() != nil) {
+		if infos.isInternalUserBot(m.SenderID()) {
+			return nil
+		}
 		link := fmt.Sprintf("%s/stream?cid=%d&mid=%d&cate=bot", strings.TrimSuffix(infos.Conf.Site, "/"), m.ChatID(), m.ID)
 		if infos.Conf.Password != "" {
 			link += fmt.Sprintf("&hash=%s&uid=%d", infos.calculateHash(m.SenderID()), m.SenderID())
@@ -817,17 +851,34 @@ func hackLink(res HackLink) (links []string) {
 	return links
 }
 
+func buildDownloadButtonLink(link string) string {
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return ""
+	}
+	parsed, err := url.Parse(link)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	query := parsed.Query()
+	query.Set("download", "true")
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
 // sendLink 发送美化后的下载链接消息
 func sendLink(m *telegram.NewMessage, link string) error {
 	text := fmt.Sprintf("<b>🔗 链接提取成功</b>\n\n<code>%s</code>\n\n👆 <i>上方链接复制, 下方按钮下载</i> 👇", html.EscapeString(link))
-	markup := telegram.InlineURL(
-		"🚀 直接下载", fmt.Sprintf("%s&download=true", link),
-	)
+	buttonLink := buildDownloadButtonLink(link)
+	options := &telegram.SendOptions{ParseMode: "html"}
+	if buttonLink != "" {
+		options.ReplyMarkup = telegram.InlineURL("🚀 直接下载", buttonLink)
+	} else {
+		text = fmt.Sprintf("<b>🔗 链接提取成功</b>\n\n<code>%s</code>\n\n⚠️ <i>当前未配置有效 site，无法附带下载按钮，请直接复制链接使用。</i>", html.EscapeString(link))
+		log.Printf("跳过下载按钮: 无效公开链接 link=%q", link)
+	}
 
-	_, err := m.Reply(text, &telegram.SendOptions{
-		ParseMode:   "html",
-		ReplyMarkup: markup,
-	})
+	_, err := m.Reply(text, options)
 
 	if err != nil {
 		log.Printf("发送下载链接失败: %+v", err)
@@ -853,11 +904,12 @@ func sendMS(m *telegram.NewMessage, src any, params *telegram.SendOptions, wait 
 		}
 		return
 	case infos.BotClient != nil:
-		if infos.Conf.UserID == 0 {
-			log.Printf("跳过主动发送消息: userID=0, message=%v", src)
+		targetID := infos.notificationTargetID()
+		if targetID == 0 {
+			log.Printf("跳过主动发送消息: 无可用通知目标, message=%v", src)
 			return
 		}
-		ms, err := infos.BotClient.SendMessage(infos.Conf.UserID, src, params)
+		ms, err := infos.BotClient.SendMessage(targetID, src, params)
 		if err != nil {
 			log.Printf("发送消息失败: %+v", err)
 		}

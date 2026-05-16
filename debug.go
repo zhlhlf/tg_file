@@ -9,12 +9,17 @@ import (
 	"os"
 )
 
+const (
+	debugColorBlue  = "\x1b[34m"
+	debugColorReset = "\x1b[0m"
+)
+
 func debugf(format string, args ...any) {
 	if infos == nil || infos.Conf == nil {
 		return
 	}
 	if infos.Conf.Debug {
-		log.Printf(format, args...)
+		log.Printf(debugColorBlue+format+debugColorReset, args...)
 	}
 }
 

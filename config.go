@@ -46,7 +46,7 @@ type UserBot struct {
 type Download struct {
 	Enabled     bool              `yaml:"enabled"`
 	OutputDir   string            `yaml:"outputDir,omitempty"`
-	PrivateChannel string         `yaml:"private_channel,omitempty"` // 私有中转频道 URL，配置后启用“转发到私有频道后由 Bot 下载”的逻辑
+	PrivateChannel string         `yaml:"private_channel,omitempty"` // 已废弃保留字段；现改为 UserBot 直接转发到轮询 Bot 私聊后下载
 	GlobalTypes []string          `yaml:"globalTypes,omitempty"`
 	SkipNameContains []string     `yaml:"skipNameContains,omitempty"` // 最终文件名包含任一字符串时跳过下载
 	Channels    []DownloadChannel `yaml:"channels,omitempty"`
@@ -283,14 +283,7 @@ func (conf *Conf) EffectiveUserBots() []UserBot {
 }
 
 func (conf *Conf) EffectiveDownloadUserBots() []UserBot {
-	bots := conf.EffectiveUserBots()
-	if len(bots) == 0 {
-		return bots
-	}
-	if strings.TrimSpace(conf.Download.PrivateChannel) != "" {
-		return bots[:1]
-	}
-	return bots
+	return conf.EffectiveUserBots()
 }
 
 func parseIntField(v any, field string) (int, error) {

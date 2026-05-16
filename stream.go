@@ -29,6 +29,7 @@ type Stream struct {
 	Ctx          context.Context        // 上下文, 用于取消下载
 	Client       *telegram.Client       // Gogram 客户端实例
 	Src          *telegram.MessageMedia // Telegram 消息媒体源
+	Peer         any                    // 消息所在会话 peer（优先用于 refresh，避免仅 CID 解析失败）
 	Workers      int                    // 下载并发协程数
 	MID          int32                  // Telegram 消息 ID
 	CID          int64                  // Telegram 频道/会话 ID
@@ -56,7 +57,7 @@ func newTask() *Task {
 }
 
 // newStream 初始化并返回一个 Stream 对象, 负责管理特定文件的流式下载
-func newStream(ctx context.Context, client *telegram.Client, media telegram.MessageMedia, workers int, mid int32, cid, contentSize int64, name string) *Stream {
+func newStream(ctx context.Context, client *telegram.Client, media telegram.MessageMedia, workers int, mid int32, cid, contentSize int64, name string, peer any) *Stream {
 	// 根据并发数动态调整分片大小
 	chunkSize := int64(1 * 1024 * 1024)
 	// 默认 32MB 缓存
@@ -81,6 +82,7 @@ func newStream(ctx context.Context, client *telegram.Client, media telegram.Mess
 		Ctx:          ctx,
 		Client:       client,
 		Src:          &media,
+		Peer:         peer,
 		Workers:      workers,
 		FileName:     name,
 		MID:          mid,
@@ -410,8 +412,16 @@ func (stream *Stream) refresh(numTask int, version int64) (err error) {
 		return
 	}
 
-	// 重新获取消息
-	ms, err := stream.Client.GetMessages(stream.CID, &telegram.SearchOption{IDs: []int32{stream.MID}})
+	// 重新获取消息：优先用原始 peer，避免私聊场景仅靠 CID 解析错误
+	refreshTarget := any(stream.CID)
+	if stream.Peer != nil {
+		refreshTarget = stream.Peer
+	}
+	ms, err := stream.Client.GetMessages(refreshTarget, &telegram.SearchOption{IDs: []int32{stream.MID}})
+	if err != nil && stream.Peer != nil {
+		debugf("refresh 通过 peer 取消息失败，回退 CID: cid=%d mid=%d err=%v", stream.CID, stream.MID, err)
+		ms, err = stream.Client.GetMessages(stream.CID, &telegram.SearchOption{IDs: []int32{stream.MID}})
+	}
 	if err != nil {
 		stream.Error = err
 		return err
@@ -425,7 +435,7 @@ func (stream *Stream) refresh(numTask int, version int64) (err error) {
 
 	// 确保消息依然包含媒体内容
 	if !src.IsMedia() {
-		err = fmt.Errorf("消息不包含媒体: cid=%d, mid=%d", stream.CID, stream.MID)
+		err = fmt.Errorf("消息不包含媒体: cid=%d, mid=%d, peerType=%T", stream.CID, stream.MID, refreshTarget)
 		stream.Error = err
 		return err
 	}
