@@ -102,7 +102,6 @@ type Infos struct {
 	Conf            *Conf                       // 指向全局配置
 	File            *os.File                    // 日志文件句柄
 	Rex             *regexp.Regexp              // 用于解析 Telegram FloodWait 错误的正则
-	RexRules        []*regexp.Regexp            // 预编译的群管正则规则缓存
 	FilesPath       string                      // 配置文件存放目录
 	FilePath        string                      // 日志文件路径
 	BotID           int64                       // 主 Bot 自身的 ID
@@ -189,27 +188,45 @@ func main() {
 				log.Printf("关闭日志文件错误: %v", err)
 			}
 		}
+		var wg sync.WaitGroup
 		for idx, client := range infos.BotClients {
 			if client == nil {
 				continue
 			}
-			if err := client.Disconnect(); err != nil {
-				log.Printf("Bot[%d] 退出失败: %+v", idx+1, err)
-			}
+			idxCopy := idx
+			clientCopy := client
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := clientCopy.Disconnect(); err != nil {
+					log.Printf("Bot[%d] 退出失败: %+v", idxCopy+1, err)
+				}
+			}()
 		}
 		if infos.UserClient != nil {
-			if err := infos.UserClient.Disconnect(); err != nil {
-				log.Printf("UserBot 退出失败: %+v", err)
-			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := infos.UserClient.Disconnect(); err != nil {
+					log.Printf("UserBot 退出失败: %+v", err)
+				}
+			}()
 		}
 		for name, client := range infos.UserClients {
 			if client == nil || client == infos.UserClient {
 				continue
 			}
-			if err := client.Disconnect(); err != nil {
-				log.Printf("UserBot(%s) 退出失败: %+v", name, err)
-			}
+			nameCopy := name
+			clientCopy := client
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := clientCopy.Disconnect(); err != nil {
+					log.Printf("UserBot(%s) 退出失败: %+v", nameCopy, err)
+				}
+			}()
 		}
+		wg.Wait()
 	}()
 
 	// 3. 校验关键配置参数
@@ -219,6 +236,8 @@ func main() {
 	}
 
 	onlyDownloadMode := len(infos.Conf.BotTokens) == 0
+	downloadCtx, cancelDownloads := context.WithCancel(context.Background())
+	defer cancelDownloads()
 	if onlyDownloadMode {
 		log.Printf("BotToken 未配置, 将跳过 Bot 监听和 HTTP 服务, 仅执行自动下载")
 	}
@@ -235,7 +254,13 @@ func main() {
 			log.Printf("初始化 UserBot 失败: %+v", err)
 			return
 		}
-		infos.startConfiguredDownloads(context.Background())
+		signal.Ignore(syscall.SIGPIPE)
+		statusChan := make(chan os.Signal, 1)
+		signal.Notify(statusChan, os.Interrupt, syscall.SIGTERM)
+		go infos.startConfiguredDownloads(downloadCtx)
+		status := <-statusChan
+		log.Printf("收到信号: %v, 正在退出...", status)
+		cancelDownloads()
 		log.Printf("自动下载流程结束, 程序退出")
 		return
 	}
@@ -247,9 +272,9 @@ func main() {
 		} else if infos.UserClient != nil {
 			infos.Status.Store(3)
 			if infos.BotClient != nil {
-				go infos.startConfiguredDownloads(context.Background())
+				go infos.startConfiguredDownloads(downloadCtx)
 			} else {
-				infos.startConfiguredDownloads(context.Background())
+				infos.startConfiguredDownloads(downloadCtx)
 			}
 		}
 	} else {
@@ -304,6 +329,7 @@ func main() {
 	// 阻塞等待直到接收到退出信号
 	status := <-statusChan
 	log.Printf("收到信号: %v, 正在退出...", status)
+	cancelDownloads()
 
 	// 设置关闭的超时时间，例如 10 秒
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -369,7 +395,6 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 	infos.Conf = conf
 	infos.IDs = make(map[int64]ID, len(conf.AdminIDs)+len(conf.WhiteIDs)+1)
 	infos.buildIDs()
-	infos.buildRexRules()
 
 	for _, token := range conf.BotTokens {
 		parts := strings.Split(token, ":")
@@ -399,21 +424,3 @@ func newOffSets() *OffSets {
 	}
 }
 
-// buildRegex 预编译正则规则并缓存到 infos.RexRules
-func (infos *Infos) buildRexRules() {
-	infos.Mutex.Lock()
-	defer infos.Mutex.Unlock()
-	infos.RexRules = make([]*regexp.Regexp, 0, len(infos.Conf.Rules))
-	for _, rule := range infos.Conf.Rules {
-		if rule == "" {
-			continue
-		}
-		r, err := regexp.Compile(rule)
-		if err != nil {
-			log.Printf("正则规则编译失败 [%s]: %+v", rule, err)
-			continue
-		}
-		infos.RexRules = append(infos.RexRules, r)
-	}
-	log.Printf("成功预编译 %d 条正则规则", len(infos.RexRules))
-}

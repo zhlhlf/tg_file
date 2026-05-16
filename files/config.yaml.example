@@ -2,7 +2,7 @@ port: 0
 id: 0
 hash: ""
 site: ""
-botToken:
+botTokens:
   - "123456:AAAA_BOT_TOKEN_1"
   - "789012:BBBB_BOT_TOKEN_2"
 # proxy: "socks5://127.0.0.1:7890"  # 可选: 代理服务器地址, 格式为 socks5://ip:port 或 http://ip:port, 为empty 则不使用代理

@@ -5,13 +5,77 @@ import (
 	"fmt"
 	"path/filepath"
 	"log"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/amarnathcjd/gogram/telegram"
 )
+
+type mediaTargetInfo struct {
+	MsgTime     time.Time
+	ChannelName string
+	RawText     string
+	Content     string
+	HasContent  bool
+	Ext         string
+	FileName    string
+	FinalPath   string
+}
 
 func buildMediaTargetPath(outputRoot, channelName string, msgTime time.Time, fileName string) string {
 	channelName = sanitizeFileName(strings.TrimSpace(channelName))
 	return filepath.Join(outputRoot, channelName, fmt.Sprintf("%04d_%02d", msgTime.Year(), msgTime.Month()), fileName)
+}
+
+func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage) (mediaTargetInfo, error) {
+	info := mediaTargetInfo{}
+
+	msgTime := time.Now()
+	if sourceMsg.Message != nil && sourceMsg.Message.Date != 0 {
+		msgTime = time.Unix(int64(sourceMsg.Message.Date), 0)
+	}
+
+	rawText := extractMessageContent(sourceMsg)
+	if strings.TrimSpace(rawText) == "" {
+		if groupCaption, err := infos.getMediaGroupCaption(ctx, sourceClient, sourceMsg); err != nil {
+			log.Printf("消息组 caption 获取失败: cid=%d mid=%d err=%v", sourceMsg.ChatID(), sourceMsg.ID, err)
+		} else if strings.TrimSpace(groupCaption) != "" {
+			rawText = groupCaption
+			debugf("消息组 caption 命中: cid=%d mid=%d caption=%q", sourceMsg.ChatID(), sourceMsg.ID, rawText)
+		}
+	}
+	debugf("原始消息内容: cid=%d mid=%d caption=%q fileName=%q", sourceMsg.ChatID(), sourceMsg.ID, rawText, func() string {
+		if sourceMsg.File != nil {
+			return sourceMsg.File.Name
+		}
+		return ""
+	}())
+
+	channelName := strings.TrimSpace(sourceMsg.Channel.Title)
+	if channelName == "" {
+		channelName = strconv.FormatInt(sourceMsg.ChatID(), 10)
+	}
+
+	content := strings.TrimSpace(rawText)
+	hasContent := content != ""
+	content = sanitizeFileName(content)
+
+	ext := determineFileExtension(sourceMsg)
+	fileName := fmt.Sprintf("%d%s", sourceMsg.ID, ext)
+	if hasContent && content != "" {
+		fileName = fmt.Sprintf("%d - %s%s", sourceMsg.ID, content, ext)
+	}
+
+	info.MsgTime = msgTime
+	info.ChannelName = channelName
+	info.RawText = rawText
+	info.Content = content
+	info.HasContent = hasContent
+	info.Ext = ext
+	info.FileName = fileName
+	info.FinalPath = buildMediaTargetPath(outputRoot, channelName, msgTime, fileName)
+	return info, nil
 }
 
 // ensureExistingMediaTarget 统一处理“本地已存在 / rclone 已存在 / 本地存在时执行 rclone”的逻辑。

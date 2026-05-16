@@ -16,7 +16,7 @@ import (
 type Conf struct {
 	Site      string    `yaml:"site"`                // 反代域名, 用于生成公开访问链接
 	AppHash   string    `yaml:"hash"`                // Telegram API Hash, 从 my.telegram.org 获取
-	BotTokens []string  `yaml:"botToken"`            // Telegram Bot Token 列表, 用于交互和管理
+	BotTokens []string  `yaml:"botTokens"`           // Telegram Bot Token 列表, 用于交互和管理
 	Proxy     string    `yaml:"proxy,omitempty"`     // 代理服务器地址, 用于连接 Telegram
 	Password  string    `yaml:"password,omitempty"`  // 访问 /link 接口时可选的身份验证密码
 	Debug     bool      `yaml:"debug,omitempty"`     // 是否启用调试日志
@@ -77,7 +77,7 @@ type DownloadChannel struct {
 type confRaw struct {
 	Site      string       `yaml:"site"`
 	AppHash   string       `yaml:"hash"`
-	BotToken  any          `yaml:"botToken"`
+	BotTokens any          `yaml:"botTokens"`
 	Proxy     string       `yaml:"proxy,omitempty"`
 	Password  string       `yaml:"password,omitempty"`
 	Debug     bool         `yaml:"debug,omitempty"`
@@ -150,7 +150,7 @@ func (conf *Conf) UnmarshalYAML(value *yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	botTokens, err := parseStringSliceField(raw.BotToken, "botToken")
+	botTokens, err := parseStringSliceField(raw.BotTokens, "botTokens")
 	if err != nil {
 		return err
 	}

@@ -52,24 +52,6 @@ func handleBotCommand(m *telegram.NewMessage) error {
 
 	text := strings.TrimSpace(m.Text())
 
-	// 拦截非管理指令并匹配正则过滤规则 [FEAT-002]
-	if !m.IsMedia() && text != "" && !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "http") {
-		infos.Mutex.RLock()
-		rexRules := infos.RexRules
-		infos.Mutex.RUnlock()
-
-		if len(rexRules) > 0 {
-			for _, rexRule := range rexRules {
-				if rexRule.MatchString(text) {
-					if _, err := m.Delete(); err != nil {
-						log.Printf("删除群组匹配消息失败: %+v", err)
-					}
-					return nil
-				}
-			}
-		}
-	}
-
 	// 以 / 开头的命令消息，1分钟后自动删除
 	if strings.HasPrefix(text, "/") {
 		go func() {
@@ -493,7 +475,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			}
 			content := strings.TrimSpace(strings.TrimPrefix(text, "/list"))
 			if content == "" {
-				sendMS(m, "请提供要列出的类别: <code>channels</code> | <code>rules</code> | <code>ids</code>", nil, 60)
+				sendMS(m, "请提供要列出的类别: <code>channels</code> | <code>ids</code>", nil, 60)
 				return nil
 			}
 			switch content {
@@ -524,19 +506,6 @@ func handleBotCommand(m *telegram.NewMessage) error {
 				values.WriteString("━━━━━━━━━━━━━━━\n")
 				for _, whiteID := range infos.Conf.WhiteIDs {
 					values.WriteString(fmt.Sprintf("• <code>%d</code>\n", whiteID))
-				}
-				sendMS(m, values.String(), nil, 60)
-			case "rules":
-				var values strings.Builder
-				count := len(infos.Conf.Rules)
-				if count == 0 {
-					sendMS(m, "⚠️ <b>目前暂无正则过滤规则</b>", nil, 60)
-					break
-				}
-				values.WriteString(fmt.Sprintf("🚫 <b>正则过滤规则列表</b> (共 %d 个)\n", count))
-				values.WriteString("━━━━━━━━━━━━━━━\n")
-				for i, rule := range infos.Conf.Rules {
-					values.WriteString(fmt.Sprintf("%d. <code>%s</code>\n", i, html.EscapeString(rule)))
 				}
 				sendMS(m, values.String(), nil, 60)
 			default:
@@ -622,77 +591,6 @@ func handleBotCommand(m *telegram.NewMessage) error {
 				values.WriteString("</pre>")
 				sendMS(m, values.String(), nil)
 			}
-			return nil
-		case strings.HasPrefix(text, "/addrule"):
-			if !infos.isAdmin(m.SenderID()) {
-				sendMS(m, "你没有使用此命令的权限", nil, 60)
-				return nil
-			}
-			rule := strings.TrimSpace(strings.TrimPrefix(text, "/addrule"))
-			if rule == "" {
-				sendMS(m, "请提供要添加的正则表达式", nil, 60)
-				return nil
-			}
-			if _, err := regexp.Compile(rule); err != nil {
-				sendMS(m, fmt.Sprintf("正则表达式格式错误: %+v", err), nil, 60)
-				return nil
-			}
-
-			infos.Mutex.Lock()
-			if slices.Contains(infos.Conf.Rules, rule) {
-				infos.Mutex.Unlock()
-				sendMS(m, "该规则已存在", nil, 60)
-				return nil
-			}
-			infos.Conf.Rules = append(infos.Conf.Rules, rule)
-			if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
-				log.Printf("保存配置文件失败: %+v", err)
-			}
-			infos.Mutex.Unlock()
-			infos.buildRexRules()
-			sendMS(m, "添加正则规则成功", nil, 60)
-			return nil
-		case strings.HasPrefix(text, "/delrule"):
-			if !infos.isAdmin(m.SenderID()) {
-				sendMS(m, "你没有使用此命令的权限", nil, 60)
-				return nil
-			}
-			content := strings.TrimSpace(strings.TrimPrefix(text, "/delrule"))
-			if content == "" {
-				sendMS(m, "请提供要移除的规则索引或内容", nil, 60)
-				return nil
-			}
-
-			infos.Mutex.Lock()
-			index, err := strconv.Atoi(content)
-			if err == nil && index >= 0 && index < len(infos.Conf.Rules) {
-				// 按索引删除
-				removed := infos.Conf.Rules[index]
-				infos.Conf.Rules = append(infos.Conf.Rules[:index], infos.Conf.Rules[index+1:]...)
-				if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
-					log.Printf("保存配置文件失败: %+v", err)
-				}
-				infos.Mutex.Unlock()
-				infos.buildRexRules()
-				sendMS(m, fmt.Sprintf("按索引移除规则成功: %s", removed), nil, 60)
-				return nil
-			}
-
-			// 按内容删除
-			if slices.Contains(infos.Conf.Rules, content) {
-				infos.Conf.Rules = slices.DeleteFunc(infos.Conf.Rules, func(r string) bool {
-					return r == content
-				})
-				if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
-					log.Printf("保存配置文件失败: %+v", err)
-				}
-				infos.Mutex.Unlock()
-				infos.buildRexRules()
-				sendMS(m, "按内容移除规则成功", nil, 60)
-				return nil
-			}
-			infos.Mutex.Unlock()
-			sendMS(m, "未找到该规则", nil, 60)
 			return nil
 		default:
 			if !infos.isAllowedBotSender(m.SenderID()) && m.SenderID() != 0 {
