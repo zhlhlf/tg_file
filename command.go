@@ -154,6 +154,19 @@ func handleBotCommand(m *telegram.NewMessage) error {
 				sendMS(m, fmt.Sprintf("启动 QR 登录失败: %+v", err), nil, 60)
 			}
 			return nil
+		case strings.HasPrefix(text, "/makebots"):
+			if !infos.isAdmin(m.SenderID()) {
+				sendMS(m, "你没有使用此命令的权限", nil, 60)
+				return nil
+			}
+			sendMS(m, "开始使用第一个 UserBot 创建 5 个机器人，token 将写回 config.yaml", nil, 60)
+			tokens, err := infos.createBotsWithFirstUserBot(5)
+			if err != nil {
+				sendMS(m, fmt.Sprintf("创建机器人失败: %+v", err), nil, 120)
+				return nil
+			}
+			sendMS(m, fmt.Sprintf("创建完成，共 %d 个，token 已写入 config.yaml", len(tokens)), nil, 120)
+			return nil
 		case strings.HasPrefix(text, "/phone"):
 			if m.SenderID() != infos.Conf.UserID {
 				sendMS(m, "你没有使用此命令的权限", nil, 60)

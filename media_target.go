@@ -60,6 +60,13 @@ func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegr
 	content := strings.TrimSpace(rawText)
 	hasContent := content != ""
 	content = sanitizeFileName(content)
+	if maxLen := infos.captionMaxLength(); maxLen > 0 {
+		truncated := truncateRunes(content, maxLen)
+		if truncated != content {
+			debugf("caption 超长，已截断: cid=%d mid=%d max=%d", sourceMsg.ChatID(), sourceMsg.ID, maxLen)
+			content = truncated
+		}
+	}
 
 	ext := determineFileExtension(sourceMsg)
 	fileName := fmt.Sprintf("%d%s", sourceMsg.ID, ext)
@@ -76,6 +83,27 @@ func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegr
 	info.FileName = fileName
 	info.FinalPath = buildMediaTargetPath(outputRoot, channelName, msgTime, fileName)
 	return info, nil
+}
+
+func (infos *Infos) captionMaxLength() int {
+	if infos == nil || infos.Conf == nil {
+		return 100
+	}
+	if infos.Conf.Download.MaxCaptionLength <= 0 {
+		return 100
+	}
+	return infos.Conf.Download.MaxCaptionLength
+}
+
+func truncateRunes(src string, maxLen int) string {
+	if maxLen <= 0 {
+		return src
+	}
+	runes := []rune(src)
+	if len(runes) <= maxLen {
+		return src
+	}
+	return string(runes[:maxLen])
 }
 
 // ensureExistingMediaTarget 统一处理“本地已存在 / rclone 已存在 / 本地存在时执行 rclone”的逻辑。

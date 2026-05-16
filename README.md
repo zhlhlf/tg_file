@@ -58,6 +58,48 @@ go run . -files files
 - `-log`：日志文件路径
 - `-version` / `-v`：输出版本号并退出
 
+## Bot 批量创建
+
+程序支持使用 `userBots` 中的第一个账号，通过 `@BotFather` 批量创建机器人，并将新 token 自动写回 `files/config.yaml` 的 `botTokens`。
+
+### 命令行方式
+
+```powershell
+.\tgfilebot.exe makebots
+```
+
+- 默认创建 `5` 个 bot
+
+```powershell
+.\tgfilebot.exe makebots 10
+```
+
+- 可指定创建数量，参数必须为正整数
+
+### 机器人命名规则
+
+- 用户名格式：`英文数字10位_bot`
+- 例如：`a1b2c3d4e5_bot`
+
+### 执行逻辑
+
+- 使用 `userBots` 里的第一个账号
+- 按 `BotFather` 的标准流程执行：
+  1. 发送 `/newbot`
+  2. 等待输入名称提示
+  3. 发送 bot 名称
+  4. 等待输入用户名提示
+  5. 发送 bot 用户名
+  6. 从成功消息中提取 token
+- 每创建一个 bot 后休眠 `2` 秒
+- 当出现 `too many attempts` 限流提示时，会自动等待指定秒数后继续
+
+### 注意事项
+
+- 需要确保 `userBots` 第一个账号已经成功登录
+- 如果 `BotFather` 会话被打断，程序会在每次创建前先尝试 `/cancel` 重置状态
+- 创建成功后的 token 会自动追加到 `files/config.yaml`
+
 ## 配置说明
 
 主要配置文件是 `files/config.yaml`。下面是常见字段说明：

@@ -160,6 +160,7 @@ func main() {
 	flag.BoolVar(&ver, "version", false, "显示程序版本号并退出")
 	flag.BoolVar(&ver, "v", false, "显示程序版本号并退出")
 	flag.Parse()
+	args := flag.Args()
 
 	// 版本检查逻辑
 	if ver {
@@ -178,6 +179,44 @@ func main() {
 	cleanAllCacheFiles()
 	if err := cleanTmpDir(); err != nil {
 		log.Printf("清理临时目录失败: %+v", err)
+		return
+	}
+
+	if len(args) > 0 && strings.EqualFold(args[0], "makebots") {
+		if err := infos.initUserClientsForDownloadOnly(); err != nil {
+			log.Printf("初始化 UserBot 失败: %+v", err)
+			return
+		}
+		if len(args) > 1 && strings.EqualFold(strings.TrimSpace(args[1]), "get") {
+			tokens, err := infos.collectAllBotTokensFromAllUsers()
+			if err != nil {
+				log.Printf("获取机器人 token 失败: %+v", err)
+				return
+			}
+			for _, token := range tokens {
+				log.Printf("- %q", token)
+			}
+			return
+		}
+
+		count := 5
+		if len(args) > 1 {
+			parsed, parseErr := strconv.Atoi(strings.TrimSpace(args[1]))
+			if parseErr != nil || parsed <= 0 {
+				log.Printf("makebots 参数错误: %q，必须为正整数，或使用 get", args[1])
+				return
+			}
+			count = parsed
+		}
+		tokens, err := infos.createBotsWithFirstUserBot(count)
+		if err != nil {
+			log.Printf("创建机器人失败: %+v", err)
+			return
+		}
+		log.Printf("创建完成，共 %d 个", len(tokens))
+		for idx, token := range tokens {
+			log.Printf("BotToken[%d]: %s", idx+1, token)
+		}
 		return
 	}
 
