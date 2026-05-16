@@ -493,7 +493,7 @@ func (stream *Stream) handleCache(task *Task, cacheKey string, contentEnd int64)
 		if values, ok := infos.TailCache[cacheKey]; ok {
 			for _, value := range values.Contents {
 				if value.Start == task.ContentStart && value.End == task.ContentEnd {
-					log.Printf("命中尾部缓存: cid=%d, mid=%d, name=%s, start=%d, end=%d", stream.CID, stream.MID, stream.FileName, task.ContentStart, task.ContentEnd)
+					debugf("命中尾部缓存: cid=%d, mid=%d, name=%s, start=%d, end=%d", stream.CID, stream.MID, stream.FileName, task.ContentStart, task.ContentEnd)
 					task.handleContent(value.Content, contentEnd)
 					return true
 				}
