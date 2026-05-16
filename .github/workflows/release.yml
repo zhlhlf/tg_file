@@ -1,6 +1,9 @@
 name: manual-release
 
 on:
+  push:
+    branches:
+    - main
   workflow_dispatch:
 
 

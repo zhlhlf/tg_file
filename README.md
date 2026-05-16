@@ -145,13 +145,14 @@ $env:CGO_ENABLED = "0"
 go build -buildvcs=false -trimpath -ldflags "-s -w" -o dist/tgfilebot-windows-amd64.exe .
 ```
 
-## GitHub Actions 手动发布
+## GitHub Actions 自动/手动发布
 
 仓库已添加手动触发的发布工作流：`.github/workflows/release.yml`。
 
 它会：
 
-- 在 GitHub Actions 中手动触发
+- push 到 `main` 分支时自动触发
+- 也支持在 GitHub Actions 中手动触发
 - 使用当前提交的 `github.sha` 作为 release tag 和名称
 - 同时构建 Linux amd64 和 Windows amd64 版本
 - 自动上传构建产物到 GitHub Release
