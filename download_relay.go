@@ -45,7 +45,7 @@ func (infos *Infos) prepareRelayBots() error {
 	if len(infos.RelayBotClients) == 0 {
 		return fmt.Errorf("没有任何可用 Bot 用于分流下载")
 	}
-	log.Printf("可用bot列表: [%s]", strings.Join(availableBots, ","))
+	log.Printf("可用bot列表(%d): [%s]", len(availableBots), strings.Join(availableBots, ","))
 	return nil
 }
 
@@ -81,6 +81,17 @@ func relayInboxKey(botID, senderID int64) string {
 	return fmt.Sprintf("%d:%d", botID, senderID)
 }
 
+func relayCaptionKey(chatID int64, msgID int32) string {
+	if chatID == 0 || msgID == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d_%d", chatID, msgID)
+}
+
+func normalizeRelayInboxCaption(msg telegram.NewMessage) string {
+	return strings.TrimSpace(extractMessageContent(msg))
+}
+
 func (infos *Infos) cacheRelayInboxMedia(botID, senderID int64, msg telegram.NewMessage) {
 	if infos == nil || botID == 0 || senderID == 0 {
 		return
@@ -94,29 +105,51 @@ func (infos *Infos) cacheRelayInboxMedia(botID, senderID int64, msg telegram.New
 	}
 	infos.Mutex.Lock()
 	if infos.RelayInbox == nil {
-		infos.RelayInbox = make(map[string]RelayInboxRecord, 16)
+		infos.RelayInbox = make(map[string][]RelayInboxRecord, 16)
 	}
-	infos.RelayInbox[relayInboxKey(botID, senderID)] = RelayInboxRecord{Msg: msg, ReceivedAt: receivedAt}
+	key := relayInboxKey(botID, senderID)
+	record := RelayInboxRecord{Msg: msg, ReceivedAt: receivedAt, Caption: normalizeRelayInboxCaption(msg)}
+	records := infos.RelayInbox[key]
+	records = append(records, record)
+	const maxRelayInboxItems = 5
+	if len(records) > maxRelayInboxItems {
+		records = append([]RelayInboxRecord(nil), records[len(records)-maxRelayInboxItems:]...)
+	}
+	infos.RelayInbox[key] = records
 	infos.Mutex.Unlock()
 }
 
-func (infos *Infos) getRelayInboxMedia(botID, senderID, minUnix int64) (telegram.NewMessage, bool) {
+func (infos *Infos) getRelayInboxMedia(botID, senderID, minUnix int64, wantedCaption string) (telegram.NewMessage, bool) {
 	if infos == nil || botID == 0 || senderID == 0 {
 		return telegram.NewMessage{}, false
 	}
 	infos.Mutex.RLock()
-	rec, ok := infos.RelayInbox[relayInboxKey(botID, senderID)]
+	records, ok := infos.RelayInbox[relayInboxKey(botID, senderID)]
 	infos.Mutex.RUnlock()
 	if !ok {
 		return telegram.NewMessage{}, false
 	}
-	if minUnix > 0 && rec.ReceivedAt < minUnix {
-		return telegram.NewMessage{}, false
+	wantedCaption = strings.TrimSpace(wantedCaption)
+	for idx := len(records) - 1; idx >= 0; idx-- {
+		rec := records[idx]
+		if minUnix > 0 && rec.ReceivedAt < minUnix {
+			continue
+		}
+		if !rec.Msg.IsMedia() || rec.Msg.Media() == nil || rec.Msg.File == nil {
+			continue
+		}
+		if wantedCaption != "" {
+			recCaption := strings.TrimSpace(rec.Caption)
+			if recCaption == "" {
+				recCaption = normalizeRelayInboxCaption(rec.Msg)
+			}
+			if recCaption != wantedCaption {
+				continue
+			}
+		}
+		return rec.Msg, true
 	}
-	if !rec.Msg.IsMedia() || rec.Msg.Media() == nil || rec.Msg.File == nil {
-		return telegram.NewMessage{}, false
-	}
-	return rec.Msg, true
+	return telegram.NewMessage{}, false
 }
 
 func previewFirstBytes(v any, limit int) (text string, hex string, total int) {
@@ -191,7 +224,8 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 		forwardTarget = resolvedPeer
 	}
 
-	relaySent, err := userClient.SendMedia(forwardTarget, refreshedMsg.Media(), &telegram.MediaOptions{Caption: extractMessageContent(refreshedMsg)})
+	captionKey := relayCaptionKey(refreshedMsg.ChatID(), refreshedMsg.ID)
+	relaySent, err := userClient.SendMedia(forwardTarget, refreshedMsg.Media(), &telegram.MediaOptions{Caption: captionKey})
 	if err != nil {
 		return fmt.Errorf("发送媒体到 Bot 私聊失败: bot=%s target=%v err=%w", relayLabel, forwardTarget, err)
 	}
@@ -226,98 +260,16 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 	if senderID == relayBotID {
 		return fmt.Errorf("检测到异常会话ID（与 Bot 自身相同）: bot=%s senderID=%d user=%s mid=%d", relayLabel, senderID, userAccount, relaySent.ID)
 	}
-	botPeer := &telegram.PeerUser{UserID: senderID}
-	debugf("Bot 拉取消息使用会话: bot=%s user=%s senderID=%d mappedID=%d botID=%d mid=%d", relayLabel, userAccount, senderID, mappedID, relayBotID, relaySent.ID)
-	approxSendUnix := time.Now().Unix()
-	if relaySent.Message != nil && relaySent.Message.Date != 0 {
-		approxSendUnix = int64(relaySent.Message.Date)
-	}
-
+	debugf("Bot 等待监听缓存: bot=%s user=%s senderID=%d mappedID=%d botID=%d mid=%d caption=%s", relayLabel, userAccount, senderID, mappedID, relayBotID, relaySent.ID, captionKey)
 	for i := 1; i <= 6; i++ {
-		if cachedMsg, ok := infos.getRelayInboxMedia(relayBotID, senderID, approxSendUnix-5); ok {
-			debugf("命中 Bot 入站媒体缓存: bot=%s senderID=%d mid=%d attempt=%d", relayLabel, senderID, cachedMsg.ID, i)
+		if cachedMsg, ok := infos.getRelayInboxMedia(relayBotID, senderID, 0, captionKey); ok {
+			debugf("命中 Bot 监听缓存: bot=%s senderID=%d cachedMid=%d attempt=%d caption=%s", relayLabel, senderID, cachedMsg.ID, i, captionKey)
 			cachedMsg.Client = relayBot
 			return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, cachedMsg, userAccount+"->"+relayLabel)
 		}
-
-		botMsgs, berr := relayBot.GetMessages(botPeer, &telegram.SearchOption{IDs: []int32{relaySent.ID}})
-		if berr == nil && len(botMsgs) > 0 {
-			debugf("Bot按ID消息状态: bot=%s mid=%d attempt=%d isMedia=%v fileNil=%v mediaType=%T", relayLabel, botMsgs[0].ID, i, botMsgs[0].IsMedia(), botMsgs[0].File == nil, botMsgs[0].Media())
-			if botMsgs[0].IsMedia() && botMsgs[0].Media() != nil && botMsgs[0].File != nil {
-				debugf("从 Bot 端获取到媒体引用（按ID）: bot=%s mid=%d attempt=%d", relayLabel, botMsgs[0].ID, i)
-				botMsg := botMsgs[0]
-				botMsg.Client = relayBot
-				return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, botMsg, userAccount+"->"+relayLabel)
-			}
-			mediaType := "<nil>"
-			if botMsgs[0].Message != nil && botMsgs[0].Message.Media != nil {
-				mediaType = fmt.Sprintf("%T", botMsgs[0].Message.Media)
-			}
-			debugf("Bot 端拉取消息但未包含媒体: bot=%s mid=%d attempt=%d mediaType=%s", relayLabel, relaySent.ID, i, mediaType)
-		} else if berr != nil {
-			debugf("从 Bot 端按ID拉取消息失败: bot=%s mid=%d attempt=%d err=%v", relayLabel, relaySent.ID, i, berr)
-			if strings.Contains(strings.ToLower(berr.Error()), "missing from cache") {
-				_, _ = relayBot.GetDialogs(&telegram.DialogOptions{Limit: 50})
-				debugf("Bot 对话缓存预热完成: bot=%s mid=%d attempt=%d", relayLabel, relaySent.ID, i)
-			}
-		}
-
-		recentMsgs, rerr := relayBot.GetMessages(botPeer, &telegram.SearchOption{Limit: 50})
-		if rerr == nil && len(recentMsgs) > 0 {
-			var candidate *telegram.NewMessage
-			for idx := range recentMsgs {
-				m := recentMsgs[idx]
-				if m.ID == relaySent.ID && m.IsMedia() && m.Media() != nil && m.File != nil {
-					candidate = &m
-					break
-				}
-			}
-			if candidate == nil {
-				for idx := range recentMsgs {
-					m := recentMsgs[idx]
-					if !m.IsMedia() || m.Media() == nil || m.File == nil {
-						continue
-					}
-					if senderID != 0 && m.SenderID() != 0 && m.SenderID() != senderID {
-						continue
-					}
-					if m.Message != nil && m.Message.Date != 0 {
-						delta := int64(m.Message.Date) - approxSendUnix
-						if delta < 0 {
-							delta = -delta
-						}
-						if delta > 180 {
-							continue
-						}
-					}
-					if m.ID >= relaySent.ID-20 && m.ID <= relaySent.ID+20 {
-						candidate = &m
-						break
-					}
-				}
-			}
-			if candidate == nil {
-				for idx := range recentMsgs {
-					m := recentMsgs[idx]
-					if !m.IsMedia() || m.Media() == nil || m.File == nil {
-						continue
-					}
-					if senderID != 0 && m.SenderID() != 0 && m.SenderID() != senderID {
-						continue
-					}
-					candidate = &m
-					break
-				}
-			}
-			if candidate != nil {
-				debugf("从 Bot 最近消息窗口匹配到媒体: bot=%s wantedMid=%d gotMid=%d sender=%d attempt=%d", relayLabel, relaySent.ID, candidate.ID, candidate.SenderID(), i)
-				candidate.Client = relayBot
-				return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, *candidate, userAccount+"->"+relayLabel)
-			}
-			debugf("Bot 最近消息窗口未匹配到媒体: bot=%s wantedMid=%d attempt=%d count=%d", relayLabel, relaySent.ID, i, len(recentMsgs))
-		}
+		debugf("等待 Bot 监听缓存中: bot=%s senderID=%d attempt=%d caption=%s", relayLabel, senderID, i, captionKey)
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	return fmt.Errorf("Bot 端消息未稳定为媒体，放弃本次并由上层重试: bot=%s mid=%d", relayLabel, relaySent.ID)
+	return fmt.Errorf("Bot 监听缓存中未拿到媒体，放弃本次并由上层重试: bot=%s mid=%d", relayLabel, relaySent.ID)
 }

@@ -39,7 +39,7 @@ func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegr
 	rawText := extractMessageContent(sourceMsg)
 	if strings.TrimSpace(rawText) == "" {
 		if groupCaption, err := infos.getMediaGroupCaption(ctx, sourceClient, sourceMsg); err != nil {
-			log.Printf("消息组 caption 获取失败: cid=%d mid=%d err=%v", sourceMsg.ChatID(), sourceMsg.ID, err)
+			debugf("消息组 caption 获取失败: cid=%d mid=%d err=%v", sourceMsg.ChatID(), sourceMsg.ID, err)
 		} else if strings.TrimSpace(groupCaption) != "" {
 			rawText = groupCaption
 			debugf("消息组 caption 命中: cid=%d mid=%d caption=%q", sourceMsg.ChatID(), sourceMsg.ID, rawText)

@@ -82,6 +82,7 @@ type ID struct {
 type RelayInboxRecord struct {
 	Msg        telegram.NewMessage
 	ReceivedAt int64
+	Caption    string
 }
 
 // Infos 结构体保存了程序运行时的全局状态和资源句柄
@@ -115,7 +116,7 @@ type Infos struct {
 	TailCache       map[string]*MediaCache      // 缓存文件尾部数据
 	DownloadStarted atomic.Bool                 // 自动下载任务是否已启动
 	LastDownloaded  map[int64]int32             // 每个频道已下载到的最新消息ID
-	RelayInbox      map[string]RelayInboxRecord // Bot 入站媒体缓存: key=botID:senderID
+	RelayInbox      map[string][]RelayInboxRecord // Bot 入站媒体缓存: key=botID:senderID, value=最近若干条媒体
 }
 
 type colorizedWriter struct {
@@ -396,7 +397,7 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 		BotIDs:      make(map[int64]struct{}, 2),
 		HeadCache:   make(map[string]*MediaCache, 4),
 		TailCache:   make(map[string]*MediaCache, 4),
-		RelayInbox:  make(map[string]RelayInboxRecord, 16),
+		RelayInbox:  make(map[string][]RelayInboxRecord, 16),
 		UserClients: make(map[string]*telegram.Client, 2),
 		UserClientIDs: make(map[string]int64, 2),
 		Rex:         regexp.MustCompile(`(?i)(?:FLOOD(?:_PREMIUM)?_WAIT_(\d+)|WAIT(?:\s+OF)?\s*(\d+))`),

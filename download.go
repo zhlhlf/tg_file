@@ -134,7 +134,7 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 		}
 	}
 	rrIdx := 0
-	log.Printf("userbot可用账号列表: %v", availableAccounts)
+	log.Printf("userbot可用账号列表(%d): %v", len(availableAccounts), availableAccounts)
 
 	// 自动解析缺少 ID 的频道 URL
 	for i, task := range infos.Conf.Download.Channels {
