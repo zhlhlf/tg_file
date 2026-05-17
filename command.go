@@ -40,7 +40,6 @@ func handleRelayInboxCapture(m *telegram.NewMessage) error {
 	}
 
 	infos.cacheRelayInboxMedia(botID, senderID, *m)
-	debugf("缓存 Bot 入站媒体: botID=%d senderID=%d mid=%d file=%s", botID, senderID, m.ID, m.File.Name)
 	return nil
 }
 

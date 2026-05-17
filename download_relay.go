@@ -260,14 +260,13 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 	if senderID == relayBotID {
 		return fmt.Errorf("检测到异常会话ID（与 Bot 自身相同）: bot=%s senderID=%d user=%s mid=%d", relayLabel, senderID, userAccount, relaySent.ID)
 	}
-	debugf("Bot 等待监听缓存: bot=%s user=%s senderID=%d mappedID=%d botID=%d mid=%d caption=%s", relayLabel, userAccount, senderID, mappedID, relayBotID, relaySent.ID, captionKey)
+	debugf("Bot 开始等待回流媒体: bot=%s user=%s senderID=%d mappedID=%d botID=%d mid=%d caption=%s", relayLabel, userAccount, senderID, mappedID, relayBotID, relaySent.ID, captionKey)
 	for i := 1; i <= 6; i++ {
 		if cachedMsg, ok := infos.getRelayInboxMedia(relayBotID, senderID, 0, captionKey); ok {
-			debugf("命中 Bot 监听缓存: bot=%s senderID=%d cachedMid=%d attempt=%d caption=%s", relayLabel, senderID, cachedMsg.ID, i, captionKey)
+			debugf("Bot 命中回流媒体: bot=%s senderID=%d cachedMid=%d attempt=%d caption=%s", relayLabel, senderID, cachedMsg.ID, i, captionKey)
 			cachedMsg.Client = relayBot
 			return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, cachedMsg, userAccount+"->"+relayLabel, cache)
 		}
-		debugf("等待 Bot 监听缓存中: bot=%s senderID=%d attempt=%d caption=%s", relayLabel, senderID, i, captionKey)
 		time.Sleep(500 * time.Millisecond)
 	}
 

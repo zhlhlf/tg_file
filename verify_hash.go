@@ -33,7 +33,7 @@ func fetchTelegramFileHashes(client *telegram.Client, media any, fileSize int64)
 	for {
 		hashes, err := client.UploadGetFileHashes(location, offset)
 		if err != nil {
-			return nil, fmt.Errorf("获取 Telegram 分段哈希失败 offset=%d: %w", offset, err)
+			return nil, fmt.Errorf("获取 文件分段哈希失败 offset=%d: %w", offset, err)
 		}
 		if len(hashes) == 0 {
 			break
@@ -182,7 +182,7 @@ func (infos *Infos) verifyDownloadedFileHashes(sourceClient *telegram.Client, so
 		return err
 	}
 	if len(hashes) == 0 {
-		debugf("未获取到 Telegram 分段哈希，跳过校验: cid=%d mid=%d", refreshedMsg.ChatID(), refreshedMsg.ID)
+		debugf("未获取到 文件分段哈希，跳过校验: cid=%d mid=%d", refreshedMsg.ChatID(), refreshedMsg.ID)
 		return nil
 	}
 
@@ -192,7 +192,7 @@ func (infos *Infos) verifyDownloadedFileHashes(sourceClient *telegram.Client, so
 			return err
 		}
 		if len(mismatches) == 0 {
-			debugf("Telegram 分段哈希校验通过: cid=%d mid=%d ranges=%d repairPass=%d", refreshedMsg.ChatID(), refreshedMsg.ID, len(hashes), pass)
+			debugf("文件分段哈希校验通过: cid=%d mid=%d ranges=%d repairPass=%d", refreshedMsg.ChatID(), refreshedMsg.ID, len(hashes), pass)
 			return nil
 		}
 
@@ -201,10 +201,10 @@ func (infos *Infos) verifyDownloadedFileHashes(sourceClient *telegram.Client, so
 			preview = preview[:5]
 		}
 		if pass >= maxRepairPasses {
-			return fmt.Errorf("Telegram 分段哈希校验失败: cid=%d mid=%d mismatches=%d sample=%v", refreshedMsg.ChatID(), refreshedMsg.ID, len(mismatches), preview)
+			return fmt.Errorf("文件分段哈希校验失败: cid=%d mid=%d mismatches=%d sample=%v", refreshedMsg.ChatID(), refreshedMsg.ID, len(mismatches), preview)
 		}
 
-		debugf("Telegram 分段哈希校验失败，开始重拉坏块: cid=%d mid=%d pass=%d/%d mismatches=%d sample=%v", refreshedMsg.ChatID(), refreshedMsg.ID, pass+1, maxRepairPasses, len(mismatches), preview)
+		debugf("文件分段哈希校验失败，开始重拉坏块: cid=%d mid=%d pass=%d/%d mismatches=%d sample=%v", refreshedMsg.ChatID(), refreshedMsg.ID, pass+1, maxRepairPasses, len(mismatches), preview)
 		refreshedMsg = refreshMessageForHashOps(sourceClient, refreshedMsg)
 		if err := redownloadMismatchedRanges(sourceClient, refreshedMsg.Media(), localPath, refreshedMsg.File.Size, mismatches); err != nil {
 			return err
