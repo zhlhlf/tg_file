@@ -116,6 +116,14 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 	lastWritten := int64(0)
 	lastSpeedAt := time.Now()
 	startedAt := lastSpeedAt
+	botCaption := strings.TrimSpace(extractMessageContent(downloadMsg))
+	botLabel := strings.TrimSpace(accountName)
+	if parts := strings.Split(botLabel, "->"); len(parts) > 1 {
+		candidate := strings.TrimSpace(parts[len(parts)-1])
+		if candidate != "" {
+			botLabel = candidate
+		}
+	}
 	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
 
@@ -135,7 +143,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 					if avgSec > 0 {
 						avgRate = float64(totalWritten) / avgSec
 					}
-					debugf("下载速度: cid=%d mid=%d cur=%s/s avg=%s/s (written=%d)", downloadMsg.ChatID(), downloadMsg.ID, formatRate(curRate), formatRate(avgRate), totalWritten)
+					debugf("下载速度: bot=%s cap=%q cur=%s/s avg=%s/s (written=%d)", botLabel, botCaption, formatRate(curRate), formatRate(avgRate), totalWritten)
 				}
 				lastWritten = totalWritten
 				lastSpeedAt = now

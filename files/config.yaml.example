@@ -26,8 +26,8 @@ userBots:
 download:
   enabled: true
   outputDir: downloads
-  # 文件名中使用的 caption 最大长度，默认 100
-  # max_caption_length: 80
+  # 文件名中使用的 caption 最大长度，默认 90
+  # max_caption_length: 90
   # 如果路径为相对路径, 它相对于运行二进制的当前工作目录 (cwd)
   # 定时扫描间隔(秒), 0 表示不扫描, 默认 0
   # scanInterval: 300

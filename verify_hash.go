@@ -137,7 +137,19 @@ func refreshMessageForHashOps(client *telegram.Client, msg telegram.NewMessage) 
 	return ms[0]
 }
 
-func redownloadMismatchedRanges(client *telegram.Client, media any, filePath string, fileSize int64, mismatches []fileHashMismatch) error {
+func findTelegramHashByRange(hashes []*telegram.FileHash, offset int64, limit int32) *telegram.FileHash {
+	for _, h := range hashes {
+		if h == nil {
+			continue
+		}
+		if h.Offset == offset && h.Limit == limit {
+			return h
+		}
+	}
+	return nil
+}
+
+func redownloadMismatchedRanges(client *telegram.Client, media any, filePath string, fileSize int64, hashes []*telegram.FileHash, mismatches []fileHashMismatch) error {
 	if client == nil {
 		return fmt.Errorf("client 为空")
 	}
@@ -150,10 +162,13 @@ func redownloadMismatchedRanges(client *telegram.Client, media any, filePath str
 	}
 	defer f.Close()
 
-	const chunkSize = 1024 * 1024
 	for _, mismatch := range mismatches {
 		if mismatch.Limit <= 0 {
 			continue
+		}
+		expectedHash := findTelegramHashByRange(hashes, mismatch.Offset, mismatch.Limit)
+		if expectedHash == nil || len(expectedHash.Hash) == 0 {
+			return fmt.Errorf("未找到坏块对应的 Telegram 哈希: offset=%d limit=%d", mismatch.Offset, mismatch.Limit)
 		}
 		wantLen := int64(mismatch.Limit)
 		if fileSize > 0 && mismatch.Offset+wantLen > fileSize {
@@ -162,22 +177,50 @@ func redownloadMismatchedRanges(client *telegram.Client, media any, filePath str
 		if wantLen <= 0 {
 			continue
 		}
-		chunkSize := pickPreciseChunkSize(wantLen)
-		end := mismatch.Offset + wantLen
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		content, _, err := client.DownloadChunk(media, int(mismatch.Offset), int(end), chunkSize, true, ctx, 20*time.Second)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("重拉坏块失败 offset=%d limit=%d preciseChunk=%d: %w", mismatch.Offset, mismatch.Limit, chunkSize, err)
+		const maxChunkRepairAttempts = 3
+		var repaired bool
+		for attempt := 1; attempt <= maxChunkRepairAttempts; attempt++ {
+			chunkSize := pickPreciseChunkSize(wantLen)
+			end := mismatch.Offset + wantLen
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			content, _, err := client.DownloadChunk(media, int(mismatch.Offset), int(end), chunkSize, true, ctx, 20*time.Second)
+			cancel()
+			if err != nil {
+				if attempt >= maxChunkRepairAttempts {
+					return fmt.Errorf("重拉坏块失败 offset=%d limit=%d preciseChunk=%d: %w", mismatch.Offset, mismatch.Limit, chunkSize, err)
+				}
+				debugf("重拉坏块失败，准备重试: offset=%d limit=%d attempt=%d/%d err=%v", mismatch.Offset, mismatch.Limit, attempt, maxChunkRepairAttempts, err)
+				time.Sleep(time.Duration(attempt) * 300 * time.Millisecond)
+				continue
+			}
+			if int64(len(content)) < wantLen {
+				if attempt >= maxChunkRepairAttempts {
+					return fmt.Errorf("重拉坏块长度不足 offset=%d want=%d actual=%d", mismatch.Offset, wantLen, len(content))
+				}
+				debugf("重拉坏块长度不足，准备重试: offset=%d want=%d actual=%d attempt=%d/%d", mismatch.Offset, wantLen, len(content), attempt, maxChunkRepairAttempts)
+				time.Sleep(time.Duration(attempt) * 300 * time.Millisecond)
+				continue
+			}
+			if int64(len(content)) > wantLen {
+				content = content[:wantLen]
+			}
+			sum := sha256.Sum256(content)
+			if !bytes.Equal(sum[:], expectedHash.Hash) {
+				if attempt >= maxChunkRepairAttempts {
+					return fmt.Errorf("重拉坏块哈希仍不匹配 offset=%d limit=%d attempt=%d/%d", mismatch.Offset, mismatch.Limit, attempt, maxChunkRepairAttempts)
+				}
+				debugf("重拉坏块哈希不匹配，准备重试: offset=%d limit=%d attempt=%d/%d", mismatch.Offset, mismatch.Limit, attempt, maxChunkRepairAttempts)
+				time.Sleep(time.Duration(attempt) * 300 * time.Millisecond)
+				continue
+			}
+			if _, err := f.WriteAt(content, mismatch.Offset); err != nil {
+				return fmt.Errorf("覆盖坏块失败 offset=%d limit=%d: %w", mismatch.Offset, mismatch.Limit, err)
+			}
+			repaired = true
+			break
 		}
-		if int64(len(content)) < wantLen {
-			return fmt.Errorf("重拉坏块长度不足 offset=%d want=%d actual=%d", mismatch.Offset, wantLen, len(content))
-		}
-		if int64(len(content)) > wantLen {
-			content = content[:wantLen]
-		}
-		if _, err := f.WriteAt(content, mismatch.Offset); err != nil {
-			return fmt.Errorf("覆盖坏块失败 offset=%d limit=%d: %w", mismatch.Offset, mismatch.Limit, err)
+		if !repaired {
+			return fmt.Errorf("重拉坏块未成功修复 offset=%d limit=%d", mismatch.Offset, mismatch.Limit)
 		}
 	}
 	if err := f.Sync(); err != nil {
@@ -229,7 +272,7 @@ func (infos *Infos) verifyDownloadedFileHashes(sourceClient *telegram.Client, so
 
 		debugf("文件分段哈希校验失败，开始重拉坏块: cid=%d mid=%d pass=%d/%d mismatches=%d sample=%v", refreshedMsg.ChatID(), refreshedMsg.ID, pass+1, maxRepairPasses, len(mismatches), preview)
 		refreshedMsg = refreshMessageForHashOps(sourceClient, refreshedMsg)
-		if err := redownloadMismatchedRanges(sourceClient, refreshedMsg.Media(), localPath, refreshedMsg.File.Size, mismatches); err != nil {
+		if err := redownloadMismatchedRanges(sourceClient, refreshedMsg.Media(), localPath, refreshedMsg.File.Size, hashes, mismatches); err != nil {
 			return err
 		}
 	}

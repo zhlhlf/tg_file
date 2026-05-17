@@ -250,6 +250,41 @@ func (infos *Infos) ensureRelayBotAlive(ctx context.Context, relayBot *telegram.
 	return nil
 }
 
+func (infos *Infos) ensureUserBotAlive(ctx context.Context, userClient *telegram.Client, userLabel string) error {
+	if userClient == nil {
+		return fmt.Errorf("user bot 为空: user=%s", userLabel)
+	}
+
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	latency, err := userClient.Ping(pingCtx)
+	if err == nil {
+		debugf("UserBot 在线: user=%s latency=%dms", userLabel, latency.Milliseconds())
+		return nil
+	}
+
+	log.Printf("UserBot Ping 失败，准备重连: user=%s err=%v", userLabel, err)
+	if disconnectErr := userClient.Disconnect(); disconnectErr != nil {
+		log.Printf("UserBot 断开旧连接失败: user=%s err=%v", userLabel, disconnectErr)
+	}
+	if connectErr := userClient.Connect(); connectErr != nil {
+		log.Printf("UserBot 重连失败: user=%s err=%v", userLabel, connectErr)
+		return connectErr
+	}
+
+	recheckCtx, recheckCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer recheckCancel()
+	recheckLatency, recheckErr := userClient.Ping(recheckCtx)
+	if recheckErr != nil {
+		log.Printf("UserBot 重连后 Ping 失败: user=%s err=%v", userLabel, recheckErr)
+		return recheckErr
+	}
+
+	log.Printf("UserBot 已重连恢复: user=%s latency=%dms", userLabel, recheckLatency.Milliseconds())
+	return nil
+}
+
 func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, userAccount string, counter *uint64, cache *mediaResolveCache) error {
 	relayBot, relayLabel, relayBotID, relayTarget, err := infos.pickRelayBot(counter)
 	if err != nil {
@@ -262,7 +297,14 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 	refreshedMsg := sourceMsg
 	refreshedMessages, refreshErr := userClient.GetMessages(sourceMsg.ChatID(), &telegram.SearchOption{IDs: []int32{sourceMsg.ID}})
 	if refreshErr != nil {
-		return fmt.Errorf("刷新源消息失败: cid=%d mid=%d err=%w", sourceMsg.ChatID(), sourceMsg.ID, refreshErr)
+		log.Printf("刷新源消息失败，尝试保活 UserBot: cid=%d mid=%d user=%s err=%v", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr)
+		if keepAliveErr := infos.ensureUserBotAlive(ctx, userClient, userAccount); keepAliveErr != nil {
+			return fmt.Errorf("刷新源消息失败且 UserBot 保活失败: cid=%d mid=%d user=%s err=%v keepalive=%w", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr, keepAliveErr)
+		}
+		refreshedMessages, refreshErr = userClient.GetMessages(sourceMsg.ChatID(), &telegram.SearchOption{IDs: []int32{sourceMsg.ID}})
+		if refreshErr != nil {
+			return fmt.Errorf("刷新源消息失败: cid=%d mid=%d err=%w", sourceMsg.ChatID(), sourceMsg.ID, refreshErr)
+		}
 	}
 	if len(refreshedMessages) == 0 {
 		return fmt.Errorf("刷新源消息为空: cid=%d mid=%d", sourceMsg.ChatID(), sourceMsg.ID)

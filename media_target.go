@@ -152,10 +152,10 @@ func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegr
 
 func (infos *Infos) captionMaxLength() int {
 	if infos == nil || infos.Conf == nil {
-		return 100
+		return 90
 	}
 	if infos.Conf.Download.MaxCaptionLength <= 0 {
-		return 100
+		return 90
 	}
 	return infos.Conf.Download.MaxCaptionLength
 }

@@ -47,7 +47,7 @@ type Download struct {
 	Enabled     bool              `yaml:"enabled"`
 	OutputDir   string            `yaml:"outputDir,omitempty"`
 	PrivateChannel string         `yaml:"private_channel,omitempty"` // 已废弃保留字段；现改为 UserBot 直接转发到轮询 Bot 私聊后下载
-	MaxCaptionLength int          `yaml:"max_caption_length,omitempty"` // 文件名中 caption 的最大长度，默认 100；小于等于 0 时也使用 100
+	MaxCaptionLength int          `yaml:"max_caption_length,omitempty"` // 文件名中 caption 的最大长度，默认 90；小于等于 0 时也使用 90
 	GlobalTypes []string          `yaml:"globalTypes,omitempty"`
 	SkipNameContains []string     `yaml:"skipNameContains,omitempty"` // 最终文件名包含任一字符串时跳过下载
 	Channels    []DownloadChannel `yaml:"channels,omitempty"`
