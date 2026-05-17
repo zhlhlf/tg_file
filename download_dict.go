@@ -129,8 +129,9 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 			return
 		}
 		lastProgressAt = now
-		debugf("下载进度: bot=%s cap=%q progress=%.2f%% speed=%s/s eta=%s", botLabel, botCaption, info.Percentage, speedText, info.ETAString())
+		debugf("下载进度: bot=%s cap=%q progress=%.2f%% speed=%s eta=%s", botLabel, botCaption, info.Percentage, speedText, info.ETAString())
 	}
+	debugf("开始 DownloadMedia: bot=%s cap=%q threads=%d sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", botLabel, botCaption, workers, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
 	_, err = downloadClient.DownloadMedia(downloadMsg.Media(), &telegram.DownloadOptions{
 		FileName:         tmpPath,
 		Threads:          workers,
@@ -138,6 +139,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 		ProgressCallback: progressCallback,
 		ProgressInterval: 1,
 	})
+	debugf("DownloadMedia 返回: bot=%s cap=%q err=%v sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", botLabel, botCaption, err, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
 	if err != nil {
 		if zeroSpeedAbort.Load() {
 			return fmt.Errorf("下载停滞: 连续20次进度速度为0，交由上层重试: sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
