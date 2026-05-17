@@ -498,11 +498,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				var err error
 				const maxAttempts = 3
 				for attempt := 1; attempt <= maxAttempts; attempt++ {
-					if len(infos.RelayBotClients) > 0 {
-						err = infos.downloadMessageViaRelay(ctx, c, outputRoot, m, acct, &relayIdx, messageCache)
-					} else {
-						err = infos.downloadMessageToFile(ctx, c, c, outputRoot, m, m, acct, messageCache)
-					}
+					err = infos.downloadMessage(ctx, c, c, outputRoot, m, m, acct, &relayIdx, messageCache)
 					if err == nil {
 						return
 					}
