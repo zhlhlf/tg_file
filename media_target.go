@@ -188,6 +188,7 @@ func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.C
 		return "", nil
 	}
 	if caption := cache.findCaptionByGroupedID(msg.Message.GroupedID); caption != "" {
+		debugf("getMediaGroupCaption cache hit: cid=%d groupedID=%d", msg.ChatID(), msg.Message.GroupedID)
 		return caption, nil
 	}
 
@@ -220,6 +221,7 @@ func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.C
 		caption := strings.TrimSpace(extractMessageContent(groupMsg))
 		if caption != "" {
 			cache.storeGroupCaption(msg.Message.GroupedID, caption)
+			debugf("getMediaGroupCaption fetched from API: cid=%d groupedID=%d", msg.ChatID(), msg.Message.GroupedID)
 			return caption, nil
 		}
 	}
