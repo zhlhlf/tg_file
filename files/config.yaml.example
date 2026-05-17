@@ -42,7 +42,6 @@ download:
   fileWorkers: 4
   rclone:
     enabled: false
-    # remoteExistsSleepMS: 100
     # configFile: C:/Users/Administrator/.config/rclone/rclone.conf
     # transferMode: move
     # remote: myremote:downloads

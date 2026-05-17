@@ -77,6 +77,7 @@ func (infos *Infos) rcloneMoveFile(ctx context.Context, localPath, remotePath st
 }
 
 func (infos *Infos) rcloneTransferFile(ctx context.Context, localPath, remotePath, mode string) error {
+	debugf("rclone传输: mode=%s local=%s remote=%s", strings.ToLower(strings.TrimSpace(mode)), localPath, remotePath)
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "copy":
 		return infos.rcloneCopyFile(ctx, localPath, remotePath)
