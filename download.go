@@ -438,7 +438,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	availableAccounts := infos.availableUserAccounts()
 	rrIdx := 0
 	var relayIdx uint64
-	const batchSize = int32(200)
+	const batchSize = int32(400)
 
 	for cursor := start; cursor <= latest; cursor += batchSize {
 		select {
