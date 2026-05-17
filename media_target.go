@@ -31,12 +31,6 @@ type mediaResolveCache struct {
 	groupCaptionByID  map[int64]string
 }
 
-type groupCaptionFlight struct {
-	done    chan struct{}
-	caption string
-	err     error
-}
-
 func newMediaResolveCache(messages []telegram.NewMessage) *mediaResolveCache {
 	cache := &mediaResolveCache{
 		messages:         make(map[int32]telegram.NewMessage, len(messages)),
@@ -193,27 +187,7 @@ func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.C
 	if client == nil || msg.Message == nil || msg.Message.GroupedID == 0 {
 		return "", nil
 	}
-	groupedID := msg.Message.GroupedID
-	if caption := cache.findCaptionByGroupedID(groupedID); caption != "" {
-		return caption, nil
-	}
-
-	flight, leader := infos.acquireGroupCaptionFlight(groupedID)
-	if !leader {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-flight.done:
-		}
-		if flight.caption != "" {
-			cache.storeGroupCaption(groupedID, flight.caption)
-		}
-		return flight.caption, flight.err
-	}
-	defer infos.finishGroupCaptionFlight(groupedID, flight)
-
-	if caption := cache.findCaptionByGroupedID(groupedID); caption != "" {
-		flight.caption = caption
+	if caption := cache.findCaptionByGroupedID(msg.Message.GroupedID); caption != "" {
 		return caption, nil
 	}
 
@@ -231,54 +205,25 @@ func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.C
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		flight.caption = ""
 		return "", nil
 	}
 
 	ms, err := client.GetMessages(msg.ChatID(), &telegram.SearchOption{IDs: ids})
 	if err != nil {
-		flight.err = err
 		return "", err
 	}
 	for _, groupMsg := range ms {
 		cache.storeMessage(groupMsg)
-		if groupMsg.Message == nil || groupMsg.Message.GroupedID != groupedID {
+		if groupMsg.Message == nil || groupMsg.Message.GroupedID != msg.Message.GroupedID {
 			continue
 		}
 		caption := strings.TrimSpace(extractMessageContent(groupMsg))
 		if caption != "" {
-			cache.storeGroupCaption(groupedID, caption)
-			flight.caption = caption
+			cache.storeGroupCaption(msg.Message.GroupedID, caption)
 			return caption, nil
 		}
 	}
 	return "", nil
-}
-
-func (infos *Infos) acquireGroupCaptionFlight(groupedID int64) (*groupCaptionFlight, bool) {
-	if infos == nil || groupedID == 0 {
-		return &groupCaptionFlight{done: make(chan struct{})}, true
-	}
-	infos.GroupCaptionMu.Lock()
-	defer infos.GroupCaptionMu.Unlock()
-	if existing, ok := infos.GroupCaptionFlights[groupedID]; ok {
-		return existing, false
-	}
-	flight := &groupCaptionFlight{done: make(chan struct{})}
-	infos.GroupCaptionFlights[groupedID] = flight
-	return flight, true
-}
-
-func (infos *Infos) finishGroupCaptionFlight(groupedID int64, flight *groupCaptionFlight) {
-	if flight == nil {
-		return
-	}
-	if infos != nil && groupedID != 0 {
-		infos.GroupCaptionMu.Lock()
-		delete(infos.GroupCaptionFlights, groupedID)
-		infos.GroupCaptionMu.Unlock()
-	}
-	close(flight.done)
 }
 
 func readStringField(src any, fieldName string) string {

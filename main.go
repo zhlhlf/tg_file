@@ -83,8 +83,6 @@ type Infos struct {
 	DownloadStarted atomic.Bool                 // 自动下载任务是否已启动
 	LastDownloaded  map[int64]int32             // 每个频道已下载到的最新消息ID
 	RelayInbox      map[string][]RelayInboxRecord // Bot 入站媒体缓存: key=botID:senderID, value=最近若干条媒体
-	GroupCaptionMu  *sync.Mutex                 // 跨批次媒体组 caption 请求去重锁
-	GroupCaptionFlights map[int64]*groupCaptionFlight // key=groupedID, value=进行中的 caption 请求
 }
 
 type colorizedWriter struct {
@@ -326,8 +324,6 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 		Pass:        make(chan string, 1),
 		BotIDs:      make(map[int64]struct{}, 2),
 		RelayInbox:  make(map[string][]RelayInboxRecord, 16),
-		GroupCaptionMu: new(sync.Mutex),
-		GroupCaptionFlights: make(map[int64]*groupCaptionFlight, 32),
 		RelayForwardSem: make(chan struct{}, 2),
 		UserClients: make(map[string]*telegram.Client, 2),
 		UserClientIDs: make(map[string]int64, 2),

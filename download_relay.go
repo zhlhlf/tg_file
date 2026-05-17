@@ -292,23 +292,25 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 	}
 
 	refreshedMsg := sourceMsg
-	refreshedMessages, refreshErr := userClient.GetMessages(sourceMsg.ChatID(), &telegram.SearchOption{IDs: []int32{sourceMsg.ID}})
-	if refreshErr != nil {
-		log.Printf("刷新源消息失败，尝试保活 UserBot: cid=%d mid=%d user=%s err=%v", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr)
-		if keepAliveErr := infos.ensureUserBotAlive(ctx, userClient, userAccount); keepAliveErr != nil {
-			return fmt.Errorf("刷新源消息失败且 UserBot 保活失败: cid=%d mid=%d user=%s err=%v keepalive=%w", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr, keepAliveErr)
-		}
-		refreshedMessages, refreshErr = userClient.GetMessages(sourceMsg.ChatID(), &telegram.SearchOption{IDs: []int32{sourceMsg.ID}})
+	if sourceMsg.File == nil {
+		refreshedMessages, refreshErr := userClient.GetMessages(sourceMsg.ChatID(), &telegram.SearchOption{IDs: []int32{sourceMsg.ID}})
 		if refreshErr != nil {
-			return fmt.Errorf("刷新源消息失败: cid=%d mid=%d err=%w", sourceMsg.ChatID(), sourceMsg.ID, refreshErr)
+			log.Printf("源消息缺少文件信息，刷新失败，尝试保活 UserBot: cid=%d mid=%d user=%s err=%v", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr)
+			if keepAliveErr := infos.ensureUserBotAlive(ctx, userClient, userAccount); keepAliveErr != nil {
+				return fmt.Errorf("刷新源消息失败且 UserBot 保活失败: cid=%d mid=%d user=%s err=%v keepalive=%w", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr, keepAliveErr)
+			}
+			refreshedMessages, refreshErr = userClient.GetMessages(sourceMsg.ChatID(), &telegram.SearchOption{IDs: []int32{sourceMsg.ID}})
+			if refreshErr != nil {
+				return fmt.Errorf("刷新源消息失败: cid=%d mid=%d err=%w", sourceMsg.ChatID(), sourceMsg.ID, refreshErr)
+			}
 		}
-	}
-	if len(refreshedMessages) == 0 {
-		return fmt.Errorf("刷新源消息为空: cid=%d mid=%d", sourceMsg.ChatID(), sourceMsg.ID)
-	}
-	refreshedMsg = refreshedMessages[0]
-	if !refreshedMsg.IsMedia() || refreshedMsg.Media() == nil {
-		return fmt.Errorf("刷新后的源消息不包含媒体: cid=%d mid=%d", refreshedMsg.ChatID(), refreshedMsg.ID)
+		if len(refreshedMessages) == 0 {
+			return fmt.Errorf("刷新源消息为空: cid=%d mid=%d", sourceMsg.ChatID(), sourceMsg.ID)
+		}
+		refreshedMsg = refreshedMessages[0]
+		if !refreshedMsg.IsMedia() || refreshedMsg.Media() == nil {
+			return fmt.Errorf("刷新后的源消息不包含媒体: cid=%d mid=%d", refreshedMsg.ChatID(), refreshedMsg.ID)
+		}
 	}
 
 	targetInfo, err := infos.resolveMediaTarget(ctx, userClient, outputRoot, refreshedMsg, cache)
