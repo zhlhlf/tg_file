@@ -197,6 +197,41 @@ func (infos *Infos) withRelayForwardLock(fn func() error) error {
 	return fn()
 }
 
+func (infos *Infos) ensureRelayBotAlive(ctx context.Context, relayBot *telegram.Client, relayLabel string) error {
+	if relayBot == nil {
+		return fmt.Errorf("relay bot 为空: bot=%s", relayLabel)
+	}
+
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	latency, err := relayBot.Ping(pingCtx)
+	if err == nil {
+		debugf("回流 Bot 在线: bot=%s latency=%dms", relayLabel, latency.Milliseconds())
+		return nil
+	}
+
+	log.Printf("回流 Bot Ping 失败，准备重连: bot=%s err=%v", relayLabel, err)
+	if disconnectErr := relayBot.Disconnect(); disconnectErr != nil {
+		log.Printf("回流 Bot 断开旧连接失败: bot=%s err=%v", relayLabel, disconnectErr)
+	}
+	if connectErr := relayBot.Connect(); connectErr != nil {
+		log.Printf("回流 Bot 重连失败: bot=%s err=%v", relayLabel, connectErr)
+		return connectErr
+	}
+
+	recheckCtx, recheckCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer recheckCancel()
+	recheckLatency, recheckErr := relayBot.Ping(recheckCtx)
+	if recheckErr != nil {
+		log.Printf("回流 Bot 重连后 Ping 失败: bot=%s err=%v", relayLabel, recheckErr)
+		return recheckErr
+	}
+
+	log.Printf("回流 Bot 已重连恢复: bot=%s latency=%dms", relayLabel, recheckLatency.Milliseconds())
+	return nil
+}
+
 func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, userAccount string, counter *uint64, cache *mediaResolveCache) error {
 	relayBot, relayLabel, relayBotID, relayTarget, err := infos.pickRelayBot(counter)
 	if err != nil {
@@ -285,6 +320,9 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 	if senderID == relayBotID {
 		return fmt.Errorf("检测到异常会话ID（与 Bot 自身相同）: bot=%s senderID=%d user=%s mid=%d", relayLabel, senderID, userAccount, relaySent.ID)
 	}
+	if err := infos.ensureRelayBotAlive(ctx, relayBot, relayLabel); err != nil {
+		return fmt.Errorf("回流等待前 Bot 不在线: bot=%s err=%w", relayLabel, err)
+	}
 	debugf("Bot 开始等待回流媒体: bot=%s user=%s senderID=%d mappedID=%d botID=%d mid=%d caption=%s", relayLabel, userAccount, senderID, mappedID, relayBotID, relaySent.ID, captionKey)
 	for i := 1; i <= 6; i++ {
 		if cachedMsg, ok := infos.getRelayInboxMedia(relayBotID, senderID, 0, captionKey); ok {
@@ -292,7 +330,15 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 			cachedMsg.Client = relayBot
 			return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, cachedMsg, userAccount+"->"+relayLabel, cache)
 		}
+		if i == 3 || i == 6 {
+			if err := infos.ensureRelayBotAlive(ctx, relayBot, relayLabel); err != nil {
+				return fmt.Errorf("回流等待期间 Bot 失联: bot=%s attempt=%d err=%w", relayLabel, i, err)
+			}
+		}
 		time.Sleep(500 * time.Millisecond)
+	}
+	if err := infos.ensureRelayBotAlive(ctx, relayBot, relayLabel); err != nil {
+		return fmt.Errorf("回流等待超时前检测到 Bot 失联: bot=%s err=%w", relayLabel, err)
 	}
 
 	return fmt.Errorf("Bot 监听缓存中未拿到媒体，放弃本次并由上层重试: bot=%s mid=%d", relayLabel, relaySent.ID)
