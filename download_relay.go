@@ -127,15 +127,24 @@ func (infos *Infos) getRelayInboxMedia(botID, senderID, minUnix int64, wantedCap
 	records, ok := infos.RelayInbox[relayInboxKey(botID, senderID)]
 	infos.Mutex.RUnlock()
 	if !ok {
+		if infos != nil && infos.Conf != nil && infos.Conf.Debug {
+			debugf("RelayInbox 未命中键: botID=%d senderID=%d wantedCaption=%q", botID, senderID, strings.TrimSpace(wantedCaption))
+		}
 		return telegram.NewMessage{}, false
 	}
 	wantedCaption = strings.TrimSpace(wantedCaption)
 	for idx := len(records) - 1; idx >= 0; idx-- {
 		rec := records[idx]
 		if minUnix > 0 && rec.ReceivedAt < minUnix {
+			if infos != nil && infos.Conf != nil && infos.Conf.Debug {
+				debugf("RelayInbox 跳过旧消息: botID=%d senderID=%d mid=%d receivedAt=%d minUnix=%d caption=%q", botID, senderID, rec.Msg.ID, rec.ReceivedAt, minUnix, strings.TrimSpace(rec.Caption))
+			}
 			continue
 		}
 		if !rec.Msg.IsMedia() || rec.Msg.Media() == nil || rec.Msg.File == nil {
+			if infos != nil && infos.Conf != nil && infos.Conf.Debug {
+				debugf("RelayInbox 跳过无效媒体: botID=%d senderID=%d mid=%d isMedia=%v fileNil=%v mediaType=%T", botID, senderID, rec.Msg.ID, rec.Msg.IsMedia(), rec.Msg.File == nil, rec.Msg.Media())
+			}
 			continue
 		}
 		if wantedCaption != "" {
@@ -144,10 +153,19 @@ func (infos *Infos) getRelayInboxMedia(botID, senderID, minUnix int64, wantedCap
 				recCaption = normalizeRelayInboxCaption(rec.Msg)
 			}
 			if recCaption != wantedCaption {
+				if infos != nil && infos.Conf != nil && infos.Conf.Debug {
+					debugf("RelayInbox caption 不匹配: botID=%d senderID=%d mid=%d wanted=%q actual=%q", botID, senderID, rec.Msg.ID, wantedCaption, recCaption)
+				}
 				continue
 			}
 		}
+		if infos != nil && infos.Conf != nil && infos.Conf.Debug {
+			debugf("RelayInbox 命中媒体: botID=%d senderID=%d mid=%d caption=%q", botID, senderID, rec.Msg.ID, strings.TrimSpace(rec.Caption))
+		}
 		return rec.Msg, true
+	}
+	if infos != nil && infos.Conf != nil && infos.Conf.Debug {
+		debugf("RelayInbox 有缓存但未匹配: botID=%d senderID=%d wantedCaption=%q cached=%d", botID, senderID, wantedCaption, len(records))
 	}
 	return telegram.NewMessage{}, false
 }
