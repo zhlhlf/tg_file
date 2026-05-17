@@ -115,6 +115,7 @@ go run . -files files
 - `download.globalTypes`：默认允许下载的媒体类型
 - `download.concurrent`：同时处理的频道数量
 - `download.fileWorkers`：单文件内部下载线程数
+- `download.batchSize`：每次批量获取消息的大小，默认 `400`，可在 `files/config.yaml` 中调整以减少请求次数或控制内存
 - `download.forceJoin`：未加入频道时是否自动尝试加入
 - `download.rclone.enabled`：是否启用 rclone 远端存在性检查和上传 move
 - `download.rclone.configFile`：指定 rclone 配置文件路径，等价于命令行 `--config`
