@@ -444,6 +444,10 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 		bs = infos.Conf.Download.BatchSize
 	}
 	batchSize := int32(bs)
+	batchInterval := time.Second
+	if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchInterval > 0 {
+		batchInterval = time.Duration(infos.Conf.Download.BatchInterval) * time.Second
+	}
 
 	for cursor := start; cursor <= latest; cursor += batchSize {
 		select {
@@ -468,9 +472,17 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 			continue
 		}
 		if len(ms) == 0 {
+			if end < latest {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(batchInterval):
+				}
+			}
 			continue
 		}
 		messageCache := newMediaResolveCache(ms)
+		var batchWG sync.WaitGroup
 
 		sort.Slice(ms, func(i, j int) bool { return ms[i].ID < ms[j].ID })
 		for _, msg := range ms {
@@ -492,9 +504,11 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 
 			// 启动受限并发的文件下载任务（文件级并发由 sem 控制）
 			wgFiles.Add(1)
+			batchWG.Add(1)
 			sem <- struct{}{}
 			go func(m telegram.NewMessage, c *telegram.Client, acct string) {
 				defer wgFiles.Done()
+				defer batchWG.Done()
 				
 				// 手动管理信号量释放，确保 cancel 卡住也能释放
 				semReleased := false
@@ -531,6 +545,14 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				<-sem
 				semReleased = true
 			}(msg, fileClient, fileAccount)
+		}
+		batchWG.Wait()
+		if end < latest {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(batchInterval):
+			}
 		}
 	}
 	return nil

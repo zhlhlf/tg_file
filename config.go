@@ -46,6 +46,7 @@ type Download struct {
 	Concurrent  int               `yaml:"concurrent,omitempty"`  // 同时并发下载的频道数量限制, 0 表示不限制
 	FileWorkers int               `yaml:"fileWorkers,omitempty"` // 每个文件内部的并发分片数, 0 表示使用全局 workers
 	BatchSize   int               `yaml:"batchSize,omitempty"`  // 每次批量获取消息的大小，默认 200
+	BatchInterval int             `yaml:"batchInterval,omitempty"` // 每批消息处理完成后，下一批拉取前的等待秒数，默认 1
 	ScanInterval int              `yaml:"scanInterval,omitempty"` // 定时扫描间隔(秒), 0 表示不配置（代码默认 300s）
 	ForceJoin   bool              `yaml:"forceJoin,omitempty"`   // 当账号未加入频道时尝试自动加入 (全局开关)
 	Rclone      Rclone            `yaml:"rclone,omitempty"`      // rclone 远端存在性检查配置
