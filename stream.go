@@ -168,7 +168,11 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 		// 尝试下载该分片
 		maxCount := 3
 		firstChunk := task.ContentStart <= contentStart+stream.ChunkSize
-		if task.ContentStart < int64(1048576) || (contentEnd-task.ContentEnd)/contentEnd*1000 < 2 {
+		nearTail := contentEnd <= 0
+		if !nearTail && contentEnd > task.ContentEnd {
+			nearTail = (contentEnd-task.ContentEnd)*1000/contentEnd < 2
+		}
+		if task.ContentStart < int64(1048576) || nearTail {
 			maxCount = 6
 		}
 
@@ -278,6 +282,7 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 					}
 				}
 			}
+			debugf("下载分片: cid=%d mid=%d worker=%d try=%d start=%d end=%d offset=%d rawLen=%d chunk=%d timeout=%s file=%s", stream.CID, stream.MID, numTask, num, task.ContentStart, task.ContentEnd, task.Offset, len(content), stream.ChunkSize, timeout, fileName)
 
 			// 缓存
 			if stream.HeadSize > 0 && stream.TailSize > 0 {
@@ -353,7 +358,11 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 				infos.Mutex.Unlock()
 			}
 
-			task.handleContent(content, contentEnd)
+			if err := task.handleContent(content, contentEnd); err != nil {
+				task.Error = err
+				close(task.Content)
+				return
+			}
 			break
 		}
 
@@ -446,22 +455,40 @@ func (stream *Stream) refresh(numTask int, version int64) (err error) {
 	return nil
 }
 
-func (task *Task) handleContent(content []byte, contentEnd int64) {
+func (task *Task) handleContent(content []byte, contentEnd int64) error {
+	if task == nil {
+		return fmt.Errorf("任务为空")
+	}
+	if task.Offset < 0 {
+		return fmt.Errorf("无效分片偏移: %d", task.Offset)
+	}
+	if int64(len(content)) < task.Offset {
+		return fmt.Errorf("分片长度不足以应用偏移: offset=%d actual=%d start=%d end=%d", task.Offset, len(content), task.ContentStart, task.ContentEnd)
+	}
 	// 根据初始偏移量截取内容
 	content = content[task.Offset:]
 	actualStart := task.ContentStart + task.Offset
+	wantedLen := task.ContentEnd - actualStart + 1
 
 	// 裁剪末尾：最后一个分片可能超出实际请求范围（contentEnd）,
 	// 防止写入 HTTP 响应时超过声明的 Content-Length
 	if task.ContentEnd > contentEnd {
-		wantedLen := contentEnd - actualStart + 1
-		if wantedLen > 0 && int64(len(content)) > wantedLen {
-			content = content[:wantedLen]
-		}
+		wantedLen = contentEnd - actualStart + 1
 		task.ContentEnd = contentEnd
 	}
+	if wantedLen < 0 {
+		return fmt.Errorf("无效分片范围: start=%d end=%d actualStart=%d contentEnd=%d", task.ContentStart, task.ContentEnd, actualStart, contentEnd)
+	}
+	if int64(len(content)) < wantedLen {
+		return fmt.Errorf("下载分片数据不完整: want=%d actual=%d start=%d end=%d", wantedLen, len(content), actualStart, task.ContentEnd)
+	}
+	if wantedLen >= 0 && int64(len(content)) > wantedLen {
+		content = content[:wantedLen]
+	}
+	debugf("处理分片: start=%d end=%d actualStart=%d offset=%d finalLen=%d requestEnd=%d", task.ContentStart, task.ContentEnd, actualStart, task.Offset, len(content), contentEnd)
 	task.Content <- content
 	close(task.Content) // 唤醒等待此分片的协程
+	return nil
 }
 
 func (stream *Stream) handleCache(task *Task, cacheKey string, contentEnd int64) (found bool) {
@@ -474,7 +501,10 @@ func (stream *Stream) handleCache(task *Task, cacheKey string, contentEnd int64)
 			for _, value := range values.Contents {
 				if value.Start == task.ContentStart && value.End == task.ContentEnd {
 					log.Printf("命中头部缓存: cid=%d, mid=%d, name=%s, start=%d, end=%d", stream.CID, stream.MID, stream.FileName, task.ContentStart, task.ContentEnd)
-					task.handleContent(value.Content, contentEnd)
+					if err := task.handleContent(value.Content, contentEnd); err != nil {
+						task.Error = err
+						close(task.Content)
+					}
 					return true
 				}
 			}
@@ -494,7 +524,10 @@ func (stream *Stream) handleCache(task *Task, cacheKey string, contentEnd int64)
 			for _, value := range values.Contents {
 				if value.Start == task.ContentStart && value.End == task.ContentEnd {
 					debugf("命中尾部缓存: cid=%d, mid=%d, name=%s, start=%d, end=%d", stream.CID, stream.MID, stream.FileName, task.ContentStart, task.ContentEnd)
-					task.handleContent(value.Content, contentEnd)
+					if err := task.handleContent(value.Content, contentEnd); err != nil {
+						task.Error = err
+						close(task.Content)
+					}
 					return true
 				}
 			}

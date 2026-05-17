@@ -99,6 +99,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 		downloadPeer = downloadMsg.Message.PeerID
 	}
 	stream := newStream(fileCtx, downloadClient, downloadMsg.Media(), workers, downloadMsg.ID, downloadMsg.ChatID(), downloadMsg.File.Size, downloadMsg.File.Name, downloadPeer)
+	debugf("下载诊断: file=%s workers=%d size=%d chunkSize=%d sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", displayLocalPath(targetInfo.FinalPath), workers, downloadMsg.File.Size, stream.ChunkSize, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
 	if err := stream.warmConnection(fileCtx); err != nil {
 		_ = f.Close()
 		return err
@@ -113,11 +114,28 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 	defer timer.Stop()
 
 	var totalWritten int64
+	nextWriteOffset := int64(0)
 	lastWritten := int64(0)
 	lastSpeedAt := time.Now()
 	startedAt := lastSpeedAt
 	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
+	pendingChunks := make(map[int64][]byte)
+	flushPendingChunks := func() error {
+		for {
+			contentBytes, ok := pendingChunks[nextWriteOffset]
+			if !ok {
+				return nil
+			}
+			delete(pendingChunks, nextWriteOffset)
+			n, err := f.Write(contentBytes)
+			if err != nil {
+				return err
+			}
+			totalWritten += int64(n)
+			nextWriteOffset += int64(len(contentBytes))
+		}
+	}
 
 	for {
 		select {
@@ -150,15 +168,19 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 
 			contentBytes, ok := <-task.Content
 			if !ok {
-				return nil
+				if totalWritten >= downloadMsg.File.Size {
+					break
+				}
+				continue
 			}
-			n, err := f.Write(contentBytes)
-			if err != nil {
+			writeStart := task.ContentStart + task.Offset
+			debugf("写入分片: file=%s start=%d end=%d offset=%d len=%d pending=%d nextWrite=%d", displayLocalPath(targetInfo.FinalPath), task.ContentStart, task.ContentEnd, task.Offset, len(contentBytes), len(pendingChunks), nextWriteOffset)
+			pendingChunks[writeStart] = contentBytes
+			if err := flushPendingChunks(); err != nil {
 				return err
 			}
-			totalWritten += int64(n)
 
-			if task.ContentEnd >= downloadMsg.File.Size-1 {
+			if totalWritten >= downloadMsg.File.Size {
 				dir := filepath.Dir(targetInfo.FinalPath)
 				if err := f.Sync(); err != nil {
 					debugf("文件同步失败: %v", err)
@@ -178,6 +200,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 						return fmt.Errorf("文件大小校验失败: 期望 %d, 实际 %d", downloadMsg.File.Size, fi.Size())
 					}
 				}
+				debugf("下载完成校验: file=%s expected=%d actual=%d", displayLocalPath(targetInfo.FinalPath), downloadMsg.File.Size, fi.Size())
 
 				// Telegram 文件元数据通常不提供稳定可用的 MD5/SHA。
 				// 这里只做大小校验，避免误判导致有效文件被删除。
