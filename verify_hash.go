@@ -229,17 +229,17 @@ func redownloadMismatchedRanges(client *telegram.Client, media any, filePath str
 	return nil
 }
 
-func (infos *Infos) verifyDownloadedFileHashes(sourceClient *telegram.Client, sourceMsg telegram.NewMessage, localPath string) error {
-	if infos == nil || sourceClient == nil {
+func (infos *Infos) verifyDownloadedFileHashes(downloadClient *telegram.Client, downloadMsg telegram.NewMessage, localPath string) error {
+	if infos == nil || downloadClient == nil {
 		return nil
 	}
-	if sourceMsg.Media() == nil || sourceMsg.File == nil || sourceMsg.File.Size <= 0 {
+	if downloadMsg.Media() == nil || downloadMsg.File == nil || downloadMsg.File.Size <= 0 {
 		return nil
 	}
 	const maxRepairPasses = 2
-	refreshedMsg := refreshMessageForHashOps(sourceClient, sourceMsg)
+	refreshedMsg := refreshMessageForHashOps(downloadClient, downloadMsg)
 
-	hashes, err := fetchTelegramFileHashes(sourceClient, refreshedMsg.Media(), refreshedMsg.File.Size)
+	hashes, err := fetchTelegramFileHashes(downloadClient, refreshedMsg.Media(), refreshedMsg.File.Size)
 	if err != nil {
 		return err
 	}
@@ -271,8 +271,12 @@ func (infos *Infos) verifyDownloadedFileHashes(sourceClient *telegram.Client, so
 		}
 
 		debugf("文件分段哈希校验失败，开始重拉坏块: cid=%d mid=%d pass=%d/%d mismatches=%d sample=%v", refreshedMsg.ChatID(), refreshedMsg.ID, pass+1, maxRepairPasses, len(mismatches), preview)
-		refreshedMsg = refreshMessageForHashOps(sourceClient, refreshedMsg)
-		if err := redownloadMismatchedRanges(sourceClient, refreshedMsg.Media(), localPath, refreshedMsg.File.Size, hashes, mismatches); err != nil {
+		refreshedMsg = refreshMessageForHashOps(downloadClient, refreshedMsg)
+		hashes, err = fetchTelegramFileHashes(downloadClient, refreshedMsg.Media(), refreshedMsg.File.Size)
+		if err != nil {
+			return err
+		}
+		if err := redownloadMismatchedRanges(downloadClient, refreshedMsg.Media(), localPath, refreshedMsg.File.Size, hashes, mismatches); err != nil {
 			return err
 		}
 	}
