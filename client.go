@@ -324,8 +324,6 @@ func (infos *Infos) startBot() (err error) {
 	relayBotIDs := make([]int64, 0, len(infos.Conf.BotTokens))
 	relayBotLabels := make([]string, 0, len(infos.Conf.BotTokens))
 	relayBotTargets := make([]string, 0, len(infos.Conf.BotTokens))
-	siteConfigured := strings.TrimSpace(infos.Conf.Site) != ""
-	printedSiteSkip := false
 	type botStartupResult struct {
 		client *telegram.Client
 		me     *telegram.UserObj
@@ -399,12 +397,9 @@ func (infos *Infos) startBot() (err error) {
 		client.On(telegram.OnMessage, handleRelayInboxCapture)
 
 		// 仅第一个 Bot 负责消息监听与命令注册
-		if idx == 0 && siteConfigured {
+		if idx == 0 {
 			client.On(telegram.OnMessage, handleBotCommand)
 			infos.setupBotCommands(client)
-		} else if idx == 0 && !siteConfigured && !printedSiteSkip {
-			log.Printf("未配置 site，跳过消息监听与命令注册")
-			printedSiteSkip = true
 		}
 		clients = append(clients, client)
 		relayBotIDs = append(relayBotIDs, me.ID)
@@ -496,43 +491,19 @@ func (infos *Infos) setupBotCommands(client *telegram.Client) {
 			},
 			{
 				Command:     "list",
-				Description: "列出搜索频道、白名单、关键词规则",
+				Description: "列出白名单",
 			},
 			{
 				Command:     "info",
 				Description: "获取程序运行信息",
 			},
 			{
-				Command:     "size",
-				Description: "设置程序缓存大小",
-			},
-			{
-				Command:     "site",
-				Description: "设置反代域名",
-			},
-			{
-				Command:     "port",
-				Description: "设置HTTP服务端口",
-			},
-			{
 				Command:     "proxy",
 				Description: "设置代理",
 			},
 			{
-				Command:     "check",
-				Description: "查找HASH对应的用户信息",
-			},
-			{
 				Command:     "workers",
 				Description: "设置并发数",
-			},
-			{
-				Command:     "channel",
-				Description: "设置绑定频道",
-			},
-			{
-				Command:     "password",
-				Description: "设置接口访问密码",
 			},
 		}
 		commands = append(commands, commonCommands...)

@@ -14,23 +14,16 @@ import (
 // Conf 结构体定义了程序运行所需的各项配置参数
 // 通过 yaml 标签与配置文件进行映射
 type Conf struct {
-	Site      string    `yaml:"site"`                // 反代域名, 用于生成公开访问链接
 	AppHash   string    `yaml:"hash"`                // Telegram API Hash, 从 my.telegram.org 获取
 	BotTokens []string  `yaml:"botTokens"`           // Telegram Bot Token 列表, 用于交互和管理
 	Proxy     string    `yaml:"proxy,omitempty"`     // 代理服务器地址, 用于连接 Telegram
-	Password  string    `yaml:"password,omitempty"`  // 访问 /link 接口时可选的身份验证密码
 	Debug     bool      `yaml:"debug,omitempty"`     // 是否启用调试日志
-	Channels  []string  `yaml:"channels,omitempty"`  // 频道列表, 用于搜索
 	DC        int       `yaml:"dc,omitempty"`        // 指定连接的 Telegram 数据中心 (Data Center) ID
-	Port      int       `yaml:"port"`                // 本地 HTTP 服务监听的端口
 	Workers   int       `yaml:"workers,omitempty"`   // 文件下载/串流时的并发协程数
 	AppID     int32     `yaml:"id"`                  // Telegram API ID, 从 my.telegram.org 获取
-	MaxSize   int64     `yaml:"maxSize,omitempty"`   // 最大缓存大小
 	UserID    int64     `yaml:"userID"`              // 管理员的 Telegram 用户 ID
-	ChannelID int64     `yaml:"channelID,omitempty"` // 默认关联的频道 ID
 	AdminIDs  []int64   `yaml:"adminIDs,omitempty"`  // 管理员 ID 列表, 拥有管理权限
 	WhiteIDs  []int64   `yaml:"whiteIDs,omitempty"`  // 白名单 ID 列表, 允许使用部分功能
-	Rules     []string  `yaml:"rules,omitempty"`     // 群管正则规则列表
 	UserBots  []UserBot `yaml:"userBots,omitempty"`  // 多 UserBot 账号配置
 	Download  Download  `yaml:"download,omitempty"`  // 自动下载任务配置
 }
@@ -46,14 +39,12 @@ type UserBot struct {
 type Download struct {
 	Enabled     bool              `yaml:"enabled"`
 	OutputDir   string            `yaml:"outputDir,omitempty"`
-	PrivateChannel string         `yaml:"private_channel,omitempty"` // 已废弃保留字段；现改为 UserBot 直接转发到轮询 Bot 私聊后下载
 	MaxCaptionLength int          `yaml:"max_caption_length,omitempty"` // 文件名中 caption 的最大长度，默认 90；小于等于 0 时也使用 90
 	GlobalTypes []string          `yaml:"globalTypes,omitempty"`
 	SkipNameContains []string     `yaml:"skipNameContains,omitempty"` // 最终文件名包含任一字符串时跳过下载
 	Channels    []DownloadChannel `yaml:"channels,omitempty"`
 	Concurrent  int               `yaml:"concurrent,omitempty"`  // 同时并发下载的频道数量限制, 0 表示不限制
 	FileWorkers int               `yaml:"fileWorkers,omitempty"` // 每个文件内部的并发分片数, 0 表示使用全局 workers
-	CacheItems  int               `yaml:"cacheItems,omitempty"`  // 媒体缓存最大条目数, 默认 10
 	ScanInterval int              `yaml:"scanInterval,omitempty"` // 定时扫描间隔(秒), 0 表示不配置（代码默认 300s）
 	ForceJoin   bool              `yaml:"forceJoin,omitempty"`   // 当账号未加入频道时尝试自动加入 (全局开关)
 	Rclone      Rclone            `yaml:"rclone,omitempty"`      // rclone 远端存在性检查配置
@@ -76,23 +67,16 @@ type DownloadChannel struct {
 }
 
 type confRaw struct {
-	Site      string       `yaml:"site"`
 	AppHash   string       `yaml:"hash"`
 	BotTokens any          `yaml:"botTokens"`
 	Proxy     string       `yaml:"proxy,omitempty"`
-	Password  string       `yaml:"password,omitempty"`
 	Debug     bool         `yaml:"debug,omitempty"`
-	Channels  []string     `yaml:"channels,omitempty"`
 	DC        any          `yaml:"dc,omitempty"`
-	Port      any          `yaml:"port"`
 	Workers   any          `yaml:"workers,omitempty"`
 	AppID     any          `yaml:"id"`
-	MaxSize   any          `yaml:"maxSize,omitempty"`
 	UserID    any          `yaml:"userID"`
-	ChannelID any          `yaml:"channelID,omitempty"`
 	AdminIDs  []any        `yaml:"adminIDs,omitempty"`
 	WhiteIDs  []any        `yaml:"whiteIDs,omitempty"`
-	Rules     []string     `yaml:"rules,omitempty"`
 	UserBots  []userBotRaw `yaml:"userBots,omitempty"`
 	Download  Download     `yaml:"download,omitempty"`
 }
@@ -119,23 +103,11 @@ func (conf *Conf) UnmarshalYAML(value *yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	port, err := parseIntField(raw.Port, "port")
-	if err != nil {
-		return err
-	}
 	workers, err := parseIntField(raw.Workers, "workers")
 	if err != nil {
 		return err
 	}
-	maxSize, err := parseInt64Field(raw.MaxSize, "maxSize")
-	if err != nil {
-		return err
-	}
 	userID, err := parseInt64Field(raw.UserID, "userID")
-	if err != nil {
-		return err
-	}
-	channelID, err := parseInt64Field(raw.ChannelID, "channelID")
 	if err != nil {
 		return err
 	}
@@ -157,23 +129,16 @@ func (conf *Conf) UnmarshalYAML(value *yaml.Node) error {
 	}
 
 	*conf = Conf{
-		Site:      raw.Site,
 		AppHash:   raw.AppHash,
 		BotTokens: botTokens,
 		Proxy:     raw.Proxy,
-		Password:  raw.Password,
 		Debug:     raw.Debug,
-		Channels:  raw.Channels,
 		DC:        dc,
-		Port:      port,
 		Workers:   workers,
 		AppID:     appID,
-		MaxSize:   maxSize,
 		UserID:    userID,
-		ChannelID: channelID,
 		AdminIDs:  adminIDs,
 		WhiteIDs:  whiteIDs,
-		Rules:     raw.Rules,
 		UserBots:  userBots,
 		Download:  raw.Download,
 	}
