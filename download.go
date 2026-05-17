@@ -438,8 +438,8 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	availableAccounts := infos.availableUserAccounts()
 	rrIdx := 0
 	var relayIdx uint64
-	// batchSize 可从配置覆盖，默认 400
-	bs := 400
+	// batchSize 可从配置覆盖，默认 200
+	bs := 200
 	if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchSize > 0 {
 		bs = infos.Conf.Download.BatchSize
 	}
