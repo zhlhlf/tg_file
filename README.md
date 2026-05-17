@@ -7,7 +7,6 @@ TGFileBot 是一个基于 Go 的 Telegram 自动下载工具。它支持 Bot 和
 - 自动下载频道文件
 - 多 UserBot 账号支持
 - 频道未加入时可自动尝试加入
-- 下载完成后进行文件大小与 Telegram 分段哈希校验
 - 支持 Bot 交互与下载分流
 - GitHub Actions 手动发布 Linux / Windows 版本
 

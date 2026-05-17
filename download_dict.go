@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/amarnathcjd/gogram/telegram"
@@ -106,16 +107,29 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 		}
 	}
 	lastProgressAt := time.Time{}
+	var zeroSpeedCount atomic.Int32
+	var zeroSpeedAbort atomic.Bool
 	progressCallback := func(info *telegram.ProgressInfo) {
 		if info == nil || infos == nil || infos.Conf == nil || !infos.Conf.Debug {
 			return
+		}
+		speedText := strings.TrimSpace(info.SpeedString())
+		if isZeroProgressSpeed(speedText) {
+			if zeroSpeedCount.Add(1) >= 20 {
+				if zeroSpeedAbort.CompareAndSwap(false, true) {
+					log.Printf("下载停滞，连续20次速度为0，取消本次下载: bot=%s cap=%q sourceCid=%d sourceMid=%d", botLabel, botCaption, sourceMsg.ChatID(), sourceMsg.ID)
+					cancel()
+				}
+			}
+		} else {
+			zeroSpeedCount.Store(0)
 		}
 		now := time.Now()
 		if !lastProgressAt.IsZero() && now.Sub(lastProgressAt) < time.Second {
 			return
 		}
 		lastProgressAt = now
-		debugf("下载进度: bot=%s cap=%q progress=%.2f%% speed=%s/s eta=%s", botLabel, botCaption, info.Percentage, info.SpeedString(), info.ETAString())
+		debugf("下载进度: bot=%s cap=%q progress=%.2f%% speed=%s/s eta=%s", botLabel, botCaption, info.Percentage, speedText, info.ETAString())
 	}
 	_, err = downloadClient.DownloadMedia(downloadMsg.Media(), &telegram.DownloadOptions{
 		FileName:         tmpPath,
@@ -125,6 +139,9 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 		ProgressInterval: 1,
 	})
 	if err != nil {
+		if zeroSpeedAbort.Load() {
+			return fmt.Errorf("下载停滞: 连续20次进度速度为0，交由上层重试: sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
+		}
 		return fmt.Errorf("下载失败: sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d: %w", sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID, err)
 	}
 
@@ -186,4 +203,12 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 	log.Printf("下载完成: %s", displayLocalPath(targetInfo.FinalPath))
 	success = true
 	return nil
+}
+
+func isZeroProgressSpeed(speedText string) bool {
+	speedText = strings.TrimSpace(speedText)
+	if speedText == "" {
+		return true
+	}
+	return strings.HasPrefix(speedText, "0.00 B") || strings.HasPrefix(speedText, "0 B") || strings.HasPrefix(speedText, "0.0 B")
 }
