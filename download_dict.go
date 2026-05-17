@@ -186,7 +186,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 						return fmt.Errorf("文件大小校验失败: 期望 %d, 实际 %d", downloadMsg.File.Size, fi.Size())
 					}
 				}
-				if err := infos.verifyDownloadedFileHashes(downloadClient, downloadMsg, tmpPath); err != nil {
+				if err := infos.verifyDownloadedFileHashes(sourceClient, sourceMsg, downloadClient, downloadMsg, tmpPath); err != nil {
 					_ = os.Remove(tmpPath)
 					return err
 				}

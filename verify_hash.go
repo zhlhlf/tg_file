@@ -137,6 +137,32 @@ func refreshMessageForHashOps(client *telegram.Client, msg telegram.NewMessage) 
 	return ms[0]
 }
 
+func isLocationInvalidError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return telegram.MatchError(err, "LOCATION_INVALID")
+}
+
+func fetchTelegramFileHashesWithFallback(primaryClient *telegram.Client, primaryMsg telegram.NewMessage, fallbackClient *telegram.Client, fallbackMsg telegram.NewMessage) (*telegram.Client, telegram.NewMessage, []*telegram.FileHash, error) {
+	primaryMsg = refreshMessageForHashOps(primaryClient, primaryMsg)
+	hashes, err := fetchTelegramFileHashes(primaryClient, primaryMsg.Media(), primaryMsg.File.Size)
+	if err == nil {
+		return primaryClient, primaryMsg, hashes, nil
+	}
+	if !isLocationInvalidError(err) || fallbackClient == nil || fallbackMsg.ID == 0 {
+		return nil, telegram.NewMessage{}, nil, err
+	}
+
+	fallbackMsg = refreshMessageForHashOps(fallbackClient, fallbackMsg)
+	fallbackHashes, fallbackErr := fetchTelegramFileHashes(fallbackClient, fallbackMsg.Media(), fallbackMsg.File.Size)
+	if fallbackErr != nil {
+		return nil, telegram.NewMessage{}, nil, fmt.Errorf("主下载消息获取文件分段哈希失败: %w；回退到源消息仍失败: %v", err, fallbackErr)
+	}
+	debugf("下载消息 file location 无效，已回退源消息哈希: primaryCid=%d primaryMid=%d fallbackCid=%d fallbackMid=%d", primaryMsg.ChatID(), primaryMsg.ID, fallbackMsg.ChatID(), fallbackMsg.ID)
+	return fallbackClient, fallbackMsg, fallbackHashes, nil
+}
+
 func findTelegramHashByRange(hashes []*telegram.FileHash, offset int64, limit int32) *telegram.FileHash {
 	for _, h := range hashes {
 		if h == nil {
@@ -229,7 +255,7 @@ func redownloadMismatchedRanges(client *telegram.Client, media any, filePath str
 	return nil
 }
 
-func (infos *Infos) verifyDownloadedFileHashes(downloadClient *telegram.Client, downloadMsg telegram.NewMessage, localPath string) error {
+func (infos *Infos) verifyDownloadedFileHashes(sourceClient *telegram.Client, sourceMsg telegram.NewMessage, downloadClient *telegram.Client, downloadMsg telegram.NewMessage, localPath string) error {
 	if infos == nil || downloadClient == nil {
 		return nil
 	}
@@ -237,9 +263,7 @@ func (infos *Infos) verifyDownloadedFileHashes(downloadClient *telegram.Client, 
 		return nil
 	}
 	const maxRepairPasses = 2
-	refreshedMsg := refreshMessageForHashOps(downloadClient, downloadMsg)
-
-	hashes, err := fetchTelegramFileHashes(downloadClient, refreshedMsg.Media(), refreshedMsg.File.Size)
+	hashClient, refreshedMsg, hashes, err := fetchTelegramFileHashesWithFallback(downloadClient, downloadMsg, sourceClient, sourceMsg)
 	if err != nil {
 		return err
 	}
@@ -271,12 +295,11 @@ func (infos *Infos) verifyDownloadedFileHashes(downloadClient *telegram.Client, 
 		}
 
 		debugf("文件分段哈希校验失败，开始重拉坏块: cid=%d mid=%d pass=%d/%d mismatches=%d sample=%v", refreshedMsg.ChatID(), refreshedMsg.ID, pass+1, maxRepairPasses, len(mismatches), preview)
-		refreshedMsg = refreshMessageForHashOps(downloadClient, refreshedMsg)
-		hashes, err = fetchTelegramFileHashes(downloadClient, refreshedMsg.Media(), refreshedMsg.File.Size)
+		hashClient, refreshedMsg, hashes, err = fetchTelegramFileHashesWithFallback(hashClient, refreshedMsg, sourceClient, sourceMsg)
 		if err != nil {
 			return err
 		}
-		if err := redownloadMismatchedRanges(downloadClient, refreshedMsg.Media(), localPath, refreshedMsg.File.Size, hashes, mismatches); err != nil {
+		if err := redownloadMismatchedRanges(hashClient, refreshedMsg.Media(), localPath, refreshedMsg.File.Size, hashes, mismatches); err != nil {
 			return err
 		}
 	}
