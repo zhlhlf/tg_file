@@ -178,6 +178,10 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 						return fmt.Errorf("文件大小校验失败: 期望 %d, 实际 %d", downloadMsg.File.Size, fi.Size())
 					}
 				}
+				if err := infos.verifyDownloadedFileHashes(sourceClient, sourceMsg, tmpPath); err != nil {
+					_ = os.Remove(tmpPath)
+					return err
+				}
 
 				// Telegram 文件元数据通常不提供稳定可用的 MD5/SHA。
 				// 这里只做大小校验，避免误判导致有效文件被删除。
