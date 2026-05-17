@@ -159,9 +159,6 @@ func (infos *Infos) getRelayInboxMedia(botID, senderID, minUnix int64, wantedCap
 				continue
 			}
 		}
-		if infos != nil && infos.Conf != nil && infos.Conf.Debug {
-			debugf("RelayInbox 命中媒体: botID=%d senderID=%d mid=%d caption=%q", botID, senderID, rec.Msg.ID, strings.TrimSpace(rec.Caption))
-		}
 		return rec.Msg, true
 	}
 	if infos != nil && infos.Conf != nil && infos.Conf.Debug {

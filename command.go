@@ -26,15 +26,6 @@ func handleRelayInboxCapture(m *telegram.NewMessage) error {
 	}
 	senderID := m.SenderID()
 	if senderID == 0 || !infos.isInternalUserBot(senderID) {
-		if infos != nil && infos.Conf != nil && infos.Conf.Debug {
-			caption := strings.TrimSpace(extractMessageContent(*m))
-			debugf("RelayInbox 忽略发送者: client=%p mid=%d senderID=%d chatID=%d internal=%v caption=%q fromIDType=%T", m.Client, m.ID, senderID, m.ChatID(), infos.isInternalUserBot(senderID), caption, func() any {
-				if m.Message != nil {
-					return m.Message.FromID
-				}
-				return nil
-			}())
-		}
 		return nil
 	}
 
@@ -53,16 +44,6 @@ func handleRelayInboxCapture(m *telegram.NewMessage) error {
 			debugf("RelayInbox 未识别到 Bot 实例: client=%p mid=%d senderID=%d chatID=%d caption=%q", m.Client, m.ID, senderID, m.ChatID(), caption)
 		}
 		return nil
-	}
-
-	if infos != nil && infos.Conf != nil && infos.Conf.Debug {
-		caption := strings.TrimSpace(extractMessageContent(*m))
-		debugf("RelayInbox 缓存媒体: botID=%d senderID=%d mid=%d chatID=%d caption=%q fileName=%q size=%d fromIDType=%T", botID, senderID, m.ID, m.ChatID(), caption, m.File.Name, m.File.Size, func() any {
-			if m.Message != nil {
-				return m.Message.FromID
-			}
-			return nil
-		}())
 	}
 	infos.cacheRelayInboxMedia(botID, senderID, *m)
 	return nil
