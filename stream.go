@@ -30,6 +30,7 @@ type Stream struct {
 	Client       *telegram.Client       // Gogram 客户端实例
 	Src          *telegram.MessageMedia // Telegram 消息媒体源
 	Peer         any                    // 消息所在会话 peer（优先用于 refresh，避免仅 CID 解析失败）
+	EnableCache  bool                   // 仅 HTTP 流式请求启用媒体缓存
 	Workers      int                    // 下载并发协程数
 	MID          int32                  // Telegram 消息 ID
 	CID          int64                  // Telegram 频道/会话 ID
@@ -57,7 +58,7 @@ func newTask() *Task {
 }
 
 // newStream 初始化并返回一个 Stream 对象, 负责管理特定文件的流式下载
-func newStream(ctx context.Context, client *telegram.Client, media telegram.MessageMedia, workers int, mid int32, cid, contentSize int64, name string, peer any) *Stream {
+func newStream(ctx context.Context, client *telegram.Client, media telegram.MessageMedia, workers int, mid int32, cid, contentSize int64, name string, peer any, enableCache bool) *Stream {
 	// 根据并发数动态调整分片大小
 	chunkSize := int64(1 * 1024 * 1024)
 	// 默认 32MB 缓存
@@ -83,6 +84,7 @@ func newStream(ctx context.Context, client *telegram.Client, media telegram.Mess
 		Client:       client,
 		Src:          &media,
 		Peer:         peer,
+		EnableCache:  enableCache,
 		Workers:      workers,
 		FileName:     name,
 		MID:          mid,
@@ -280,7 +282,7 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 			}
 
 			// 缓存
-			if stream.HeadSize > 0 && stream.TailSize > 0 {
+			if stream.EnableCache && stream.HeadSize > 0 && stream.TailSize > 0 {
 				infos.Mutex.Lock()
 				switch {
 				case task.ContentStart <= stream.HeadSize && task.ContentEnd <= stream.HeadSize:
@@ -465,6 +467,9 @@ func (task *Task) handleContent(content []byte, contentEnd int64) {
 }
 
 func (stream *Stream) handleCache(task *Task, cacheKey string, contentEnd int64) (found bool) {
+	if !stream.EnableCache {
+		return false
+	}
 	infos.Mutex.Lock()
 	defer infos.Mutex.Unlock()
 	// 从缓存读取
@@ -473,7 +478,7 @@ func (stream *Stream) handleCache(task *Task, cacheKey string, contentEnd int64)
 		if values, ok := infos.HeadCache[cacheKey]; ok {
 			for _, value := range values.Contents {
 				if value.Start == task.ContentStart && value.End == task.ContentEnd {
-					log.Printf("命中头部缓存: cid=%d, mid=%d, name=%s, start=%d, end=%d", stream.CID, stream.MID, stream.FileName, task.ContentStart, task.ContentEnd)
+					debugf("命中头部缓存: cid=%d, mid=%d, name=%s, start=%d, end=%d", stream.CID, stream.MID, stream.FileName, task.ContentStart, task.ContentEnd)
 					task.handleContent(value.Content, contentEnd)
 					return true
 				}

@@ -389,6 +389,11 @@ func (infos *Infos) startBot() (err error) {
 
 		client := result.client
 		me := result.me
+		if me.Username != "" {
+			log.Printf("Bot[%d] 初始化完成: id=%d username=@%s", idx+1, me.ID, me.Username)
+		} else {
+			log.Printf("Bot[%d] 初始化完成: id=%d", idx+1, me.ID)
+		}
 
 		// 始终注册入站媒体捕获器，供下载分流链路使用
 		client.On(telegram.OnMessage, handleRelayInboxCapture)

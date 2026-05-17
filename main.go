@@ -93,6 +93,7 @@ type Infos struct {
 	RelayBotLabels  []string                    // 与 RelayBotClients 对应的显示名称
 	RelayBotIDs     []int64                     // 与 RelayBotClients 对应的 Bot 用户 ID
 	RelayBotTargets []string                    // 与 RelayBotClients 对应的可解析目标（优先 @username）
+	RelayForwardSem chan struct{}               // UserBot -> Bot 转发限流，最多允许 2 个并发进入
 	UserClient      *telegram.Client            // 全局 UserBot 客户端实例（用于读取私有内容和流式传输）
 	UserClients     map[string]*telegram.Client // 多 UserBot 客户端实例
 	UserClientIDs   map[string]int64            // UserBot 名称到用户 ID 的映射
@@ -398,6 +399,7 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 		HeadCache:   make(map[string]*MediaCache, 4),
 		TailCache:   make(map[string]*MediaCache, 4),
 		RelayInbox:  make(map[string][]RelayInboxRecord, 16),
+		RelayForwardSem: make(chan struct{}, 2),
 		UserClients: make(map[string]*telegram.Client, 2),
 		UserClientIDs: make(map[string]int64, 2),
 		Rex:         regexp.MustCompile(`(?i)(?:FLOOD(?:_PREMIUM)?_WAIT_(\d+)|WAIT(?:\s+OF)?\s*(\d+))`),

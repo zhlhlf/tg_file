@@ -98,7 +98,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 	if downloadMsg.Message != nil && downloadMsg.Message.PeerID != nil {
 		downloadPeer = downloadMsg.Message.PeerID
 	}
-	stream := newStream(fileCtx, downloadClient, downloadMsg.Media(), workers, downloadMsg.ID, downloadMsg.ChatID(), downloadMsg.File.Size, downloadMsg.File.Name, downloadPeer)
+	stream := newStream(fileCtx, downloadClient, downloadMsg.Media(), workers, downloadMsg.ID, downloadMsg.ChatID(), downloadMsg.File.Size, downloadMsg.File.Name, downloadPeer, false)
 	if err := stream.warmConnection(fileCtx); err != nil {
 		_ = f.Close()
 		return err

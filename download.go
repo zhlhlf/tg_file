@@ -119,20 +119,7 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 	}
 	sem := make(chan struct{}, concurrency)
 	var wgFiles sync.WaitGroup
-	// 收集已登录的账号列表并排序
-	accountNames := make([]string, 0, len(infos.UserClients))
-	for name := range infos.UserClients {
-		accountNames = append(accountNames, name)
-	}
-	sort.Strings(accountNames)
-
-	// 准备可用账号列表，用于轮询分配（仅在 task.User 未指定时生效）
-	availableAccounts := make([]string, 0, len(accountNames))
-	for _, name := range accountNames {
-		if infos.UserClients[name] != nil {
-			availableAccounts = append(availableAccounts, name)
-		}
-	}
+	availableAccounts := infos.availableUserAccounts()
 	rrIdx := 0
 	log.Printf("userbot可用账号列表(%d): %v", len(availableAccounts), availableAccounts)
 
@@ -265,30 +252,38 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 			continue
 		}
 
-		var accountName string
-		var client *telegram.Client
+		candidateAccounts := infos.channelCandidateAccounts(task, availableAccounts, &rrIdx)
 
-		// 如果配置中指定了特定账号，仍然尊重配置；否则从可用账号中轮询分配
-		if strings.TrimSpace(task.User) != "" {
-			accountName, client = infos.clientNameForTask(task)
-		} else {
-			if len(availableAccounts) == 0 {
-				accountName, client = infos.clientNameForTask(task)
-			} else {
-				assignedIdx := rrIdx % len(availableAccounts)
-				accountName = availableAccounts[assignedIdx]
-				client = infos.UserClients[accountName]
-				rrIdx++
-			}
-		}
-
-		if client == nil {
+		if len(candidateAccounts) == 0 {
 			log.Printf("频道下载跳过: cid=%d user=%s, 未找到可用 UserBot", task.ID, task.User)
 			continue
 		}
 
-		if err := infos.downloadChannelRange(ctx, client, outputRoot, task, sem, &wgFiles, accountName); err != nil {
-			log.Printf("频道下载失败: cid=%d err=%v", task.ID, err)
+		var lastErr error
+		for idx, accountName := range candidateAccounts {
+			client := infos.resolveTaskClient(task, accountName)
+			if client == nil {
+				if client == nil {
+					lastErr = fmt.Errorf("未找到可用 UserBot")
+					log.Printf("频道下载失败: cid=%d user=%s err=%v", task.ID, accountName, lastErr)
+					continue
+				}
+			}
+
+			if err := infos.downloadChannelRange(ctx, client, outputRoot, task, sem, &wgFiles, accountName); err != nil {
+				lastErr = err
+				log.Printf("频道下载失败: cid=%d user=%s err=%v", task.ID, accountName, err)
+				if strings.TrimSpace(task.User) == "" && len(infos.RelayBotClients) > 0 && idx < len(candidateAccounts)-1 {
+					log.Printf("频道下载切换下一个账号: cid=%d from=%s to=%s", task.ID, accountName, candidateAccounts[idx+1])
+					continue
+				}
+			} else {
+				lastErr = nil
+				break
+			}
+		}
+		if lastErr != nil {
+			continue
 		}
 	}
 	wgFiles.Wait()
@@ -438,20 +433,9 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	}
 
 	typeFilter, allowAll := normalizeTypeFilter(infos.Conf.Download.GlobalTypes, task.Types)
-	log.Printf("频道开始下载: cid=%d from=%d latest=%d", task.ID, start, latest)
+	log.Printf("频道开始下载: cid=%d from=%d latest=%d user=%s", task.ID, start, latest, accountName)
 
-	// 为文件级别分配准备可用账号列表（用于按文件轮询分配）
-	accountNames := make([]string, 0, len(infos.UserClients))
-	for name := range infos.UserClients {
-		accountNames = append(accountNames, name)
-	}
-	sort.Strings(accountNames)
-	availableAccounts := make([]string, 0, len(accountNames))
-	for _, n := range accountNames {
-		if infos.UserClients[n] != nil {
-			availableAccounts = append(availableAccounts, n)
-		}
-	}
+	availableAccounts := infos.availableUserAccounts()
 	rrIdx := 0
 	var relayIdx uint64
 
@@ -498,20 +482,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				}
 			}
 
-			// 选择用于此文件下载的账号（若 task.User 指定则使用该账号），否则按文件轮询分配
-			var fileAccount string
-			var fileClient *telegram.Client
-			if strings.TrimSpace(task.User) != "" {
-				fileAccount, fileClient = infos.clientNameForTask(task)
-			} else {
-				if len(availableAccounts) == 0 {
-					fileAccount, fileClient = infos.clientNameForTask(task)
-				} else {
-					fileAccount = availableAccounts[rrIdx%len(availableAccounts)]
-					fileClient = infos.UserClients[fileAccount]
-					rrIdx++
-				}
-			}
+			fileAccount, fileClient := infos.selectFileDownloadClient(task, accountName, client, availableAccounts, &rrIdx)
 
 			// 启动受限并发的文件下载任务（文件级并发由 sem 控制）
 			wgFiles.Add(1)
@@ -544,6 +515,65 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 		}
 	}
 	return nil
+}
+
+func (infos *Infos) availableUserAccounts() []string {
+	accountNames := make([]string, 0, len(infos.UserClients))
+	for name := range infos.UserClients {
+		accountNames = append(accountNames, name)
+	}
+	sort.Strings(accountNames)
+	availableAccounts := make([]string, 0, len(accountNames))
+	for _, name := range accountNames {
+		if infos.UserClients[name] != nil {
+			availableAccounts = append(availableAccounts, name)
+		}
+	}
+	return availableAccounts
+}
+
+func (infos *Infos) channelCandidateAccounts(task DownloadChannel, availableAccounts []string, rrIdx *int) []string {
+	if user := strings.TrimSpace(task.User); user != "" {
+		return []string{user}
+	}
+	if len(infos.RelayBotClients) > 0 && len(availableAccounts) > 0 {
+		return append([]string(nil), availableAccounts...)
+	}
+	if len(availableAccounts) > 0 {
+		assignedIdx := *rrIdx % len(availableAccounts)
+		*rrIdx++
+		return []string{availableAccounts[assignedIdx]}
+	}
+	if accountName, client := infos.clientNameForTask(task); client != nil {
+		return []string{accountName}
+	}
+	return nil
+}
+
+func (infos *Infos) resolveTaskClient(task DownloadChannel, accountName string) *telegram.Client {
+	if client := infos.UserClients[accountName]; client != nil {
+		return client
+	}
+	if strings.TrimSpace(task.User) != "" {
+		_, client := infos.clientNameForTask(task)
+		return client
+	}
+	return nil
+}
+
+func (infos *Infos) selectFileDownloadClient(task DownloadChannel, accountName string, client *telegram.Client, availableAccounts []string, rrIdx *int) (string, *telegram.Client) {
+	if len(infos.RelayBotClients) > 0 && strings.TrimSpace(task.User) == "" {
+		return accountName, client
+	}
+	if strings.TrimSpace(task.User) != "" {
+		return infos.clientNameForTask(task)
+	}
+	if len(availableAccounts) > 0 {
+		selected := availableAccounts[*rrIdx%len(availableAccounts)]
+		*rrIdx++
+		return selected, infos.UserClients[selected]
+	}
+	return infos.clientNameForTask(task)
 }
 
 func (infos *Infos) shouldSkipByFileName(fileName, skipPath string) bool {

@@ -192,7 +192,11 @@ func (infos *Infos) verifyDownloadedFileHashes(sourceClient *telegram.Client, so
 			return err
 		}
 		if len(mismatches) == 0 {
-			debugf("文件分段哈希校验通过: cid=%d mid=%d ranges=%d repairPass=%d", refreshedMsg.ChatID(), refreshedMsg.ID, len(hashes), pass)
+			if pass > 0 {
+				debugf("重拉坏块修复成功: cid=%d mid=%d repairPass=%d ranges=%d path=%s", refreshedMsg.ChatID(), refreshedMsg.ID, pass, len(hashes), localPath)
+			} else {
+				debugf("文件分段哈希校验通过: cid=%d mid=%d ranges=%d", refreshedMsg.ChatID(), refreshedMsg.ID, len(hashes))
+			}
 			return nil
 		}
 
