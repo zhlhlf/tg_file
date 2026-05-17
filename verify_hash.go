@@ -18,6 +18,24 @@ type fileHashMismatch struct {
 	Limit  int32
 }
 
+func pickPreciseChunkSize(wantLen int64) int {
+	const (
+		maxChunk = 1024 * 1024
+		minChunk = 4 * 1024
+	)
+	if wantLen <= minChunk {
+		return minChunk
+	}
+	chunk := maxChunk
+	for int64(chunk) > wantLen && chunk > minChunk {
+		chunk /= 2
+	}
+	if chunk < minChunk {
+		chunk = minChunk
+	}
+	return chunk
+}
+
 func fetchTelegramFileHashes(client *telegram.Client, media any, fileSize int64) ([]*telegram.FileHash, error) {
 	if client == nil {
 		return nil, fmt.Errorf("client 为空")
@@ -144,12 +162,13 @@ func redownloadMismatchedRanges(client *telegram.Client, media any, filePath str
 		if wantLen <= 0 {
 			continue
 		}
-		end := mismatch.Offset + wantLen - 1
+		chunkSize := pickPreciseChunkSize(wantLen)
+		end := mismatch.Offset + wantLen
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		content, _, err := client.DownloadChunk(media, int(mismatch.Offset), int(end), chunkSize, false, ctx, 20*time.Second)
+		content, _, err := client.DownloadChunk(media, int(mismatch.Offset), int(end), chunkSize, true, ctx, 20*time.Second)
 		cancel()
 		if err != nil {
-			return fmt.Errorf("重拉坏块失败 offset=%d limit=%d: %w", mismatch.Offset, mismatch.Limit, err)
+			return fmt.Errorf("重拉坏块失败 offset=%d limit=%d preciseChunk=%d: %w", mismatch.Offset, mismatch.Limit, chunkSize, err)
 		}
 		if int64(len(content)) < wantLen {
 			return fmt.Errorf("重拉坏块长度不足 offset=%d want=%d actual=%d", mismatch.Offset, wantLen, len(content))
