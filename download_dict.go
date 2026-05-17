@@ -107,18 +107,19 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 		}
 	}
 	lastProgressAt := time.Time{}
-	var lastProgressUnix atomic.Int64
-	lastProgressUnix.Store(time.Now().UnixNano())
-	var noProgressAbort atomic.Bool
+	var lastSizeChangeUnix atomic.Int64
+	lastSizeChangeUnix.Store(time.Now().UnixNano())
+	var lastObservedSize atomic.Int64
+	lastObservedSize.Store(-1)
+	var noSizeChangeAbort atomic.Bool
 	progressCallback := func(info *telegram.ProgressInfo) {
 		if info == nil {
 			return
 		}
-		lastProgressUnix.Store(time.Now().UnixNano())
+		speedText := strings.TrimSpace(info.SpeedString())
 		if infos == nil || infos.Conf == nil || !infos.Conf.Debug {
 			return
 		}
-		speedText := strings.TrimSpace(info.SpeedString())
 		now := time.Now()
 		if !lastProgressAt.IsZero() && now.Sub(lastProgressAt) < time.Second {
 			return
@@ -138,12 +139,20 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 			case <-fileCtx.Done():
 				return
 			case <-ticker.C:
-				lastAt := time.Unix(0, lastProgressUnix.Load())
+				currentSize := int64(-1)
+				if fi, statErr := os.Stat(tmpPath); statErr == nil {
+					currentSize = fi.Size()
+				}
+				if currentSize != lastObservedSize.Load() {
+					lastObservedSize.Store(currentSize)
+					lastSizeChangeUnix.Store(time.Now().UnixNano())
+				}
+				lastAt := time.Unix(0, lastSizeChangeUnix.Load())
 				if time.Since(lastAt) < 20*time.Second {
 					continue
 				}
-				if noProgressAbort.CompareAndSwap(false, true) {
-					log.Printf("下载停滞，20秒无进度回调，取消本次下载: bot=%s cap=%q sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", botLabel, botCaption, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
+				if noSizeChangeAbort.CompareAndSwap(false, true) {
+					log.Printf("下载停滞，20秒内文件大小无变化，取消本次下载: bot=%s cap=%q size=%d sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", botLabel, botCaption, currentSize, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
 					cancel()
 				}
 				return
@@ -160,8 +169,8 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 	})
 	debugf("DownloadMedia 返回: bot=%s cap=%q err=%v sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", botLabel, botCaption, err, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
 	if err != nil {
-		if noProgressAbort.Load() {
-			return fmt.Errorf("下载停滞: 20秒无进度回调，交由上层重试: sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
+		if noSizeChangeAbort.Load() {
+			return fmt.Errorf("下载停滞: 20秒内文件大小无变化，交由上层重试: sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
 		}
 		return fmt.Errorf("下载失败: sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d: %w", sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID, err)
 	}
