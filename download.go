@@ -490,9 +490,22 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 			sem <- struct{}{}
 			go func(m telegram.NewMessage, c *telegram.Client, acct string) {
 				defer wgFiles.Done()
-				defer func() { <-sem }()
+				
+				// 手动管理信号量释放，确保 cancel 卡住也能释放
+				semReleased := false
+				defer func() {
+					if !semReleased {
+						<-sem
+					}
+					if r := recover(); r != nil {
+						log.Printf("下载panic: cid=%d mid=%d user=%s err=%v", task.ID, m.ID, acct, r)
+					}
+				}()
+				
 				if c == nil {
 					log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, m.ID, acct, fmt.Errorf("未找到可用客户端"))
+					<-sem
+					semReleased = true
 					return
 				}
 				var err error
@@ -500,6 +513,8 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				for attempt := 1; attempt <= maxAttempts; attempt++ {
 					err = infos.downloadMessage(ctx, c, c, outputRoot, m, m, acct, &relayIdx, messageCache)
 					if err == nil {
+						<-sem
+						semReleased = true
 						return
 					}
 					if attempt < maxAttempts {
@@ -508,6 +523,8 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 					}
 				}
 				log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, m.ID, acct, err)
+				<-sem
+				semReleased = true
 			}(msg, fileClient, fileAccount)
 		}
 	}
