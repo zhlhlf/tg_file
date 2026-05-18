@@ -102,12 +102,14 @@ func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegr
 	}
 
 	rawText := extractMessageContent(sourceMsg)
+	captionFromCache := false
 	if strings.TrimSpace(rawText) == "" {
-		if groupCaption, err := infos.getMediaGroupCaption(ctx, sourceClient, sourceMsg, cache); err != nil {
+		if groupCaption, fromCache, err := infos.getMediaGroupCaption(ctx, sourceClient, sourceMsg, cache); err != nil {
 			debugf("消息组 caption 获取失败: cid=%d mid=%d err=%v", sourceMsg.ChatID(), sourceMsg.ID, err)
 		} else if strings.TrimSpace(groupCaption) != "" {
 			rawText = groupCaption
-			debugf("消息组 caption 命中: cid=%d mid=%d caption=%q", sourceMsg.ChatID(), sourceMsg.ID, rawText)
+			captionFromCache = fromCache
+			debugf("消息组 caption 命中: cid=%d mid=%d fromCache=%t caption=%q", sourceMsg.ChatID(), sourceMsg.ID, captionFromCache, rawText)
 		}
 	}
 	debugf("原始消息内容: cid=%d mid=%d caption=%q fileName=%q", sourceMsg.ChatID(), sourceMsg.ID, rawText, func() string {
@@ -183,13 +185,13 @@ func extractMessageContent(msg telegram.NewMessage) string {
 	return strings.TrimSpace(msg.Text())
 }
 
-func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.Client, msg telegram.NewMessage, cache *mediaResolveCache) (string, error) {
+func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.Client, msg telegram.NewMessage, cache *mediaResolveCache) (string, bool, error) {
 	if client == nil || msg.Message == nil || msg.Message.GroupedID == 0 {
-		return "", nil
+		return "", false, nil
 	}
 	if caption := cache.findCaptionByGroupedID(msg.Message.GroupedID); caption != "" {
 		debugf("getMediaGroupCaption cache hit: cid=%d groupedID=%d", msg.ChatID(), msg.Message.GroupedID)
-		return caption, nil
+		return caption, true, nil
 	}
 
 	ids := make([]int32, 0, 11)
@@ -206,12 +208,12 @@ func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.C
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		return "", nil
+		return "", false, nil
 	}
 
 	ms, err := client.GetMessages(msg.ChatID(), &telegram.SearchOption{IDs: ids})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	for _, groupMsg := range ms {
 		cache.storeMessage(groupMsg)
@@ -222,10 +224,10 @@ func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.C
 		if caption != "" {
 			cache.storeGroupCaption(msg.Message.GroupedID, caption)
 			debugf("getMediaGroupCaption fetched from API: cid=%d groupedID=%d", msg.ChatID(), msg.Message.GroupedID)
-			return caption, nil
+			return caption, false, nil
 		}
 	}
-	return "", nil
+	return "", false, nil
 }
 
 func readStringField(src any, fieldName string) string {
