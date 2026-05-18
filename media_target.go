@@ -112,12 +112,6 @@ func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegr
 			debugf("消息组 caption 命中: cid=%d mid=%d fromCache=%t caption=%q", sourceMsg.ChatID(), sourceMsg.ID, captionFromCache, rawText)
 		}
 	}
-	debugf("原始消息内容: cid=%d mid=%d caption=%q fileName=%q", sourceMsg.ChatID(), sourceMsg.ID, rawText, func() string {
-		if sourceMsg.File != nil {
-			return sourceMsg.File.Name
-		}
-		return ""
-	}())
 
 	channelName := strings.TrimSpace(sourceMsg.Channel.Title)
 	if channelName == "" {
@@ -190,7 +184,6 @@ func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.C
 		return "", false, nil
 	}
 	if caption := cache.findCaptionByGroupedID(msg.Message.GroupedID); caption != "" {
-		debugf("getMediaGroupCaption cache hit: cid=%d groupedID=%d", msg.ChatID(), msg.Message.GroupedID)
 		return caption, true, nil
 	}
 
@@ -223,7 +216,6 @@ func (infos *Infos) getMediaGroupCaption(ctx context.Context, client *telegram.C
 		caption := strings.TrimSpace(extractMessageContent(groupMsg))
 		if caption != "" {
 			cache.storeGroupCaption(msg.Message.GroupedID, caption)
-			debugf("getMediaGroupCaption fetched from API: cid=%d groupedID=%d", msg.ChatID(), msg.Message.GroupedID)
 			return caption, false, nil
 		}
 	}

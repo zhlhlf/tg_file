@@ -133,7 +133,6 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 		debugf("下载进度: bot=%s cap=%q progress=%.2f%% speed=%s eta=%s", botLabel, botCaption, info.Percentage, speedText, info.ETAString())
 	}
 	watchdogDone := make(chan struct{})
-	defer close(watchdogDone)
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
