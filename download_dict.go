@@ -77,9 +77,9 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 		return nil, err
 	}
 
-	tmpFileName := fmt.Sprintf("%d%s.tmp", sourceMsg.ID, targetInfo.Ext)
+	tmpFileName := fmt.Sprintf("%d_%d%s.tmp", sourceMsg.ChatID(), sourceMsg.ID, targetInfo.Ext)
 	if targetInfo.HasContent && targetInfo.Content != "" {
-		tmpFileName = fmt.Sprintf("%d - %s%s.tmp", sourceMsg.ID, targetInfo.Content, targetInfo.Ext)
+		tmpFileName = fmt.Sprintf("%d_%d - %s%s.tmp", sourceMsg.ChatID(), sourceMsg.ID, targetInfo.Content, targetInfo.Ext)
 	}
 	tmpPath := filepath.Join(tmpDir, tmpFileName)
 	log.Printf("下载文件: user=%s final=%s", accountName, displayLocalPath(targetInfo.FinalPath))
