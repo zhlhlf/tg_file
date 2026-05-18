@@ -159,7 +159,6 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 			}
 		}
 	}()
-	debugf("开始 DownloadMedia: bot=%s cap=%q threads=%d sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", botLabel, botCaption, workers, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
 	_, err = downloadClient.DownloadMedia(downloadMsg.Media(), &telegram.DownloadOptions{
 		FileName:         tmpPath,
 		Threads:          workers,

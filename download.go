@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/amarnathcjd/gogram/telegram"
@@ -438,124 +439,202 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	availableAccounts := infos.availableUserAccounts()
 	rrIdx := 0
 	var relayIdx uint64
-	// batchSize 可从配置覆盖，默认 200
-	bs := 200
+	// batchSize 可从配置覆盖，默认 100
+	bs := 100
 	if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchSize > 0 {
 		bs = infos.Conf.Download.BatchSize
 	}
 	batchSize := int32(bs)
-	batchInterval := time.Second
-	if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchInterval > 0 {
-		batchInterval = time.Duration(infos.Conf.Download.BatchInterval) * time.Second
+	workerCount := cap(sem)
+	if workerCount <= 0 {
+		workerCount = 1
 	}
 
-	for cursor := start; cursor <= latest; cursor += batchSize {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+	type downloadJob struct {
+		msg     telegram.NewMessage
+		client  *telegram.Client
+		account string
+		cache   *mediaResolveCache
+	}
 
-		end := cursor + batchSize - 1
-		if end > latest {
-			end = latest
-		}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-		ids := make([]int32, 0, end-cursor+1)
-		for mid := cursor; mid <= end; mid++ {
-			ids = append(ids, mid)
-		}
+	jobs := make(chan downloadJob, bs)
+	const refillThreshold int32 = 30
+	var queueLatestID atomic.Int32
+	var latestConsumedID atomic.Int32
+	var queuedJobs atomic.Int32
+	var exhausted atomic.Bool
+	var fetchMu sync.Mutex
+	var closeJobsOnce sync.Once
+	var workerWG sync.WaitGroup
+	nextCursor := start
 
-		ms, err := client.GetMessages(task.ID, &telegram.SearchOption{IDs: ids})
-		if err != nil {
-			log.Printf("批量获取消息失败: cid=%d start=%d end=%d err=%v", task.ID, cursor, end, err)
-			continue
-		}
-		if len(ms) == 0 {
-			if end < latest {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(batchInterval):
-				}
-			}
-			continue
-		}
-		messageCache := newMediaResolveCache(ms)
-		var batchWG sync.WaitGroup
+	closeJobs := func() {
+		closeJobsOnce.Do(func() {
+			close(jobs)
+		})
+	}
 
-		sort.Slice(ms, func(i, j int) bool { return ms[i].ID < ms[j].ID })
-		for _, msg := range ms {
-			if msg.File == nil || !msg.IsMedia() {
-				continue
-			}
+	go func() {
+		<-ctx.Done()
+		closeJobs()
+	}()
 
-			msgType, ok := detectMessageType(msg)
-			if !ok {
-				continue
-			}
-			if !allowAll {
-				if _, exists := typeFilter[msgType]; !exists {
-					continue
-				}
-			}
+	fetchNextJobs := func() error {
+		fetchMu.Lock()
+		defer fetchMu.Unlock()
 
-			fileAccount, fileClient := infos.selectFileDownloadClient(task, accountName, client, availableAccounts, &rrIdx)
-
-			// 启动受限并发的文件下载任务（文件级并发由 sem 控制）
-			wgFiles.Add(1)
-			batchWG.Add(1)
-			sem <- struct{}{}
-			go func(m telegram.NewMessage, c *telegram.Client, acct string) {
-				defer wgFiles.Done()
-				defer batchWG.Done()
-				
-				// 手动管理信号量释放，确保 cancel 卡住也能释放
-				semReleased := false
-				defer func() {
-					if !semReleased {
-						<-sem
-					}
-					if r := recover(); r != nil {
-						log.Printf("下载panic: cid=%d mid=%d user=%s err=%v", task.ID, m.ID, acct, r)
-					}
-				}()
-				
-				if c == nil {
-					log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, m.ID, acct, fmt.Errorf("未找到可用客户端"))
-					<-sem
-					semReleased = true
-					return
-				}
-				var err error
-				const maxAttempts = 3
-				for attempt := 1; attempt <= maxAttempts; attempt++ {
-					err = infos.downloadMessage(ctx, c, c, outputRoot, m, m, acct, &relayIdx, messageCache)
-					if err == nil {
-						<-sem
-						semReleased = true
-						return
-					}
-					if attempt < maxAttempts {
-						debugf("下载消息失败，准备重试: cid=%d mid=%d user=%s attempt=%d/%d err=%v", task.ID, m.ID, acct, attempt, maxAttempts, err)
-						time.Sleep(time.Duration(attempt) * 2 * time.Second)
-					}
-				}
-				log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, m.ID, acct, err)
-				<-sem
-				semReleased = true
-			}(msg, fileClient, fileAccount)
-		}
-		batchWG.Wait()
-		if end < latest {
+		for nextCursor <= latest {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(batchInterval):
+			default:
+			}
+
+			cursor := nextCursor
+			end := cursor + batchSize - 1
+			if end > latest {
+				end = latest
+			}
+			nextCursor = end + 1
+
+			ids := make([]int32, 0, end-cursor+1)
+			for mid := cursor; mid <= end; mid++ {
+				ids = append(ids, mid)
+			}
+
+			ms, err := client.GetMessages(task.ID, &telegram.SearchOption{IDs: ids})
+			if err != nil {
+				log.Printf("批量获取消息失败: cid=%d start=%d end=%d err=%v", task.ID, cursor, end, err)
+				continue
+			}
+			if len(ms) == 0 {
+				continue
+			}
+
+			messageCache := newMediaResolveCache(ms)
+			sort.Slice(ms, func(i, j int) bool { return ms[i].ID < ms[j].ID })
+
+			enqueued := 0
+			for _, msg := range ms {
+				if msg.File == nil || !msg.IsMedia() {
+					continue
+				}
+
+				msgType, ok := detectMessageType(msg)
+				if !ok {
+					continue
+				}
+				if !allowAll {
+					if _, exists := typeFilter[msgType]; !exists {
+						continue
+					}
+				}
+
+				fileAccount, fileClient := infos.selectFileDownloadClient(task, accountName, client, availableAccounts, &rrIdx)
+				wgFiles.Add(1)
+				queuedJobs.Add(1)
+
+				job := downloadJob{msg: msg, client: fileClient, account: fileAccount, cache: messageCache}
+				select {
+				case <-ctx.Done():
+					queuedJobs.Add(-1)
+					wgFiles.Done()
+					return ctx.Err()
+				case jobs <- job:
+					queueLatestID.Store(msg.ID)
+					enqueued++
+				}
+			}
+
+			if enqueued > 0 {
+				return nil
 			}
 		}
+
+		exhausted.Store(true)
+		if queuedJobs.Load() == 0 {
+			closeJobs()
+		}
+		return nil
 	}
-	return nil
+
+	workerWG.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go func() {
+			defer workerWG.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case job, ok := <-jobs:
+					if !ok {
+						return
+					}
+
+					latestConsumedID.Store(job.msg.ID)
+					remaining := queuedJobs.Add(-1)
+					if remaining == refillThreshold {
+						if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
+							log.Printf("补充下载队列失败: cid=%d consumed=%d queuedLatest=%d err=%v", task.ID, latestConsumedID.Load(), queueLatestID.Load(), err)
+						}
+					}
+
+					if job.client == nil {
+						log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, job.msg.ID, job.account, fmt.Errorf("未找到可用客户端"))
+						wgFiles.Done()
+						if exhausted.Load() && queuedJobs.Load() == 0 {
+							closeJobs()
+						}
+						continue
+					}
+
+					var jobErr error
+					const maxAttempts = 3
+					for attempt := 1; attempt <= maxAttempts; attempt++ {
+						jobErr = infos.downloadMessage(ctx, job.client, job.client, outputRoot, job.msg, job.msg, job.account, &relayIdx, job.cache)
+						if jobErr == nil {
+							break
+						}
+						if attempt < maxAttempts {
+							debugf("下载消息失败，准备重试: cid=%d mid=%d user=%s attempt=%d/%d err=%v", task.ID, job.msg.ID, job.account, attempt, maxAttempts, jobErr)
+							time.Sleep(time.Duration(attempt) * 2 * time.Second)
+						}
+					}
+					if jobErr != nil {
+						log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, job.msg.ID, job.account, jobErr)
+					}
+					wgFiles.Done()
+
+					if exhausted.Load() && queuedJobs.Load() == 0 {
+						closeJobs()
+					}
+				}
+			}
+		}()
+	}
+
+	for queuedJobs.Load() < refillThreshold && !exhausted.Load() {
+		if err := fetchNextJobs(); err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			log.Printf("初始化下载队列失败: cid=%d err=%v", task.ID, err)
+			break
+		}
+		if queuedJobs.Load() == 0 {
+			break
+		}
+	}
+
+	if queuedJobs.Load() == 0 && exhausted.Load() {
+		closeJobs()
+	}
+
+	workerWG.Wait()
+	return ctx.Err()
 }
 
 func (infos *Infos) availableUserAccounts() []string {
