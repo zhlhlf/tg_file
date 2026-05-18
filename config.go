@@ -14,17 +14,17 @@ import (
 // Conf 结构体定义了程序运行所需的各项配置参数
 // 通过 yaml 标签与配置文件进行映射
 type Conf struct {
-	AppHash   string    `yaml:"hash"`                // Telegram API Hash, 从 my.telegram.org 获取
-	BotTokens []string  `yaml:"botTokens"`           // Telegram Bot Token 列表, 用于交互和管理
-	Proxy     string    `yaml:"proxy,omitempty"`     // 代理服务器地址, 用于连接 Telegram
-	Debug     bool      `yaml:"debug,omitempty"`     // 是否启用调试日志
-	DC        int       `yaml:"dc,omitempty"`        // 指定连接的 Telegram 数据中心 (Data Center) ID
-	Workers   int       `yaml:"workers,omitempty"`   // 文件下载/串流时的并发协程数
-	AppID     int32     `yaml:"id"`                  // Telegram API ID, 从 my.telegram.org 获取
-	AdminIDs  []int64   `yaml:"adminIDs,omitempty"`  // 管理员 ID 列表, 拥有管理权限
-	WhiteIDs  []int64   `yaml:"whiteIDs,omitempty"`  // 白名单 ID 列表, 允许使用部分功能
-	UserBots  []UserBot `yaml:"userBots,omitempty"`  // 多 UserBot 账号配置
-	Download  Download  `yaml:"download,omitempty"`  // 自动下载任务配置
+	AppHash   string    `yaml:"hash"`               // Telegram API Hash, 从 my.telegram.org 获取
+	BotTokens []string  `yaml:"botTokens"`          // Telegram Bot Token 列表, 用于交互和管理
+	Proxy     string    `yaml:"proxy,omitempty"`    // 代理服务器地址, 用于连接 Telegram
+	Debug     bool      `yaml:"debug,omitempty"`    // 是否启用调试日志
+	DC        int       `yaml:"dc,omitempty"`       // 指定连接的 Telegram 数据中心 (Data Center) ID
+	Workers   int       `yaml:"workers,omitempty"`  // 文件下载/串流时的并发协程数
+	AppID     int32     `yaml:"id"`                 // Telegram API ID, 从 my.telegram.org 获取
+	AdminIDs  []int64   `yaml:"adminIDs,omitempty"` // 管理员 ID 列表, 拥有管理权限
+	WhiteIDs  []int64   `yaml:"whiteIDs,omitempty"` // 白名单 ID 列表, 允许使用部分功能
+	UserBots  []UserBot `yaml:"userBots,omitempty"` // 多 UserBot 账号配置
+	Download  Download  `yaml:"download,omitempty"` // 自动下载任务配置
 }
 
 type UserBot struct {
@@ -36,18 +36,18 @@ type UserBot struct {
 }
 
 type Download struct {
-	Enabled     bool              `yaml:"enabled"`
-	OutputDir   string            `yaml:"outputDir,omitempty"`
-	MaxCaptionLength int          `yaml:"max_caption_length,omitempty"` // 文件名中 caption 的最大长度，默认 90；小于等于 0 时也使用 90
-	GlobalTypes []string          `yaml:"globalTypes,omitempty"`
-	SkipNameContains []string     `yaml:"skipNameContains,omitempty"` // 最终文件名包含任一字符串时跳过下载
-	Channels    []DownloadChannel `yaml:"channels,omitempty"`
-	Concurrent  int               `yaml:"concurrent,omitempty"`  // 同时并发下载的频道数量限制, 0 表示不限制
-	FileWorkers int               `yaml:"fileWorkers,omitempty"` // 每个文件内部的并发分片数, 0 表示使用全局 workers
-	BatchSize   int               `yaml:"batchSize,omitempty"`  // 每次批量获取消息的大小，默认 100
-	ScanInterval int              `yaml:"scanInterval,omitempty"` // 定时扫描间隔(秒), 0 表示不配置（代码默认 300s）
-	ForceJoin   bool              `yaml:"forceJoin,omitempty"`   // 当账号未加入频道时尝试自动加入 (全局开关)
-	Rclone      Rclone            `yaml:"rclone,omitempty"`      // rclone 远端存在性检查配置
+	Enabled          bool              `yaml:"enabled"`
+	OutputDir        string            `yaml:"outputDir,omitempty"`
+	MaxCaptionLength int               `yaml:"max_caption_length,omitempty"` // 文件名中 caption 的最大长度，默认 90；小于等于 0 时也使用 90
+	GlobalTypes      []string          `yaml:"globalTypes,omitempty"`
+	SkipNameContains []string          `yaml:"skipNameContains,omitempty"` // 最终文件名包含任一字符串时跳过下载
+	Channels         []DownloadChannel `yaml:"channels,omitempty"`
+	Concurrent       int               `yaml:"concurrent,omitempty"`   // 同时并发下载的频道数量限制, 0 表示不限制
+	FileWorkers      int               `yaml:"fileWorkers,omitempty"`  // 每个文件内部的并发分片数, 0 表示使用全局 workers
+	BatchSize        int               `yaml:"batchSize,omitempty"`    // 每次批量获取消息的大小，默认 100
+	ScanInterval     int               `yaml:"scanInterval,omitempty"` // 定时扫描间隔(秒), 0 表示不配置（代码默认 300s）
+	ForceJoin        bool              `yaml:"forceJoin,omitempty"`    // 当账号未加入频道时尝试自动加入 (全局开关)
+	Rclone           Rclone            `yaml:"rclone,omitempty"`       // rclone 远端存在性检查配置
 }
 
 type Rclone struct {
@@ -55,6 +55,7 @@ type Rclone struct {
 	ConfigFile   string `yaml:"configFile,omitempty"`
 	Remote       string `yaml:"remote,omitempty"`
 	TransferMode string `yaml:"transferMode,omitempty"` // move 或 copy, 默认 move
+	FuzzyMatchID bool   `yaml:"fuzzyMatchID,omitempty"` // 远端存在性检查时只按消息 ID 匹配，适合文件名规则变更后重扫
 }
 
 type DownloadChannel struct {

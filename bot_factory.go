@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/amarnathcjd/gogram/telegram"
@@ -18,6 +19,12 @@ var botFatherTooManyAttemptsPattern = regexp.MustCompile(`(?i)too many attempts\
 type botFatherStep struct {
 	containsAny []string
 	timeout     time.Duration
+}
+
+type collectBotTokensResult struct {
+	name   string
+	tokens []string
+	err    error
 }
 
 func (infos *Infos) createBotsWithFirstUserBot(count int) ([]string, error) {
@@ -85,29 +92,55 @@ func (infos *Infos) collectAllBotTokensFromAllUsers() ([]string, error) {
 		return nil, fmt.Errorf("未找到可用 UserBot 客户端")
 	}
 
-	unique := make(map[string]struct{})
-	allTokens := make([]string, 0, 16)
+	results := make(chan collectBotTokensResult, len(clients))
+	var wg sync.WaitGroup
 	for name, client := range clients {
 		if client == nil {
 			continue
 		}
-		peer, err := client.ResolvePeer("@BotFather")
-		if err != nil {
-			debugf("解析 @BotFather 失败: user=%s err=%v", name, err)
-			continue
+		wg.Add(1)
+		go func(name string, client *telegram.Client) {
+			defer wg.Done()
+			peer, err := client.ResolvePeer("@BotFather")
+			if err != nil {
+				results <- collectBotTokensResult{name: name, err: fmt.Errorf("解析 @BotFather 失败: %w", err)}
+				return
+			}
+			me, err := client.GetMe()
+			if err != nil {
+				results <- collectBotTokensResult{name: name, err: fmt.Errorf("获取 UserBot 信息失败: %w", err)}
+				return
+			}
+			lastSeen := infos.latestBotFatherReplyID(client, peer, me.ID)
+			tokens, err := infos.collectBotTokensFromSingleUser(name, client, peer, me.ID, &lastSeen)
+			if err != nil {
+				results <- collectBotTokensResult{name: name, tokens: tokens, err: fmt.Errorf("通过 /token 获取 BotToken 失败: %w", err)}
+				return
+			}
+			results <- collectBotTokensResult{name: name, tokens: tokens}
+		}(name, client)
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	unique := make(map[string]struct{})
+	allTokens := make([]string, 0, 16)
+	successUsers := 0
+	failedUsers := 0
+	for result := range results {
+		if result.err != nil {
+			failedUsers++
+			debugf("UserBot[%s] 获取失败: %v", result.name, result.err)
+			if len(result.tokens) == 0 {
+				continue
+			}
 		}
-		me, err := client.GetMe()
-		if err != nil {
-			debugf("获取 UserBot 信息失败: user=%s err=%v", name, err)
-			continue
+		if result.err == nil {
+			successUsers++
 		}
-		lastSeen := infos.latestBotFatherReplyID(client, peer, me.ID)
-		tokens, err := infos.collectBotTokensFromSingleUser(name, client, peer, me.ID, &lastSeen)
-		if err != nil {
-			debugf("通过 /token 获取 BotToken 失败: user=%s err=%v", name, err)
-			continue
-		}
-		for _, token := range tokens {
+		for _, token := range result.tokens {
 			if _, ok := unique[token]; ok {
 				continue
 			}
@@ -115,12 +148,13 @@ func (infos *Infos) collectAllBotTokensFromAllUsers() ([]string, error) {
 			allTokens = append(allTokens, token)
 			infos.appendBotToken(token)
 		}
-		log.Printf("UserBot[%s] 获取完成，发现 token=%d", name, len(tokens))
+		log.Printf("UserBot[%s] 获取完成，发现 token=%d", result.name, len(result.tokens))
 	}
 
 	if len(allTokens) == 0 {
 		return nil, fmt.Errorf("未从任何 UserBot 账号获取到 token")
 	}
+	log.Printf("所有 UserBot 获取完成：成功账号=%d 失败账号=%d 去重后 token 总数=%d", successUsers, failedUsers, len(allTokens))
 	return allTokens, nil
 }
 
@@ -137,7 +171,7 @@ func (infos *Infos) collectBotTokensFromSingleUser(name string, client *telegram
 		return nil, err
 	}
 
-	usernames := extractBotUsernamesFromMarkup(resp)
+	usernames := infos.collectBotUsernamesFromMyBots(name, client, peer, actorID, resp)
 	if len(usernames) == 0 {
 		return nil, fmt.Errorf("BotFather 未返回 bot 列表")
 	}
@@ -176,6 +210,50 @@ func (infos *Infos) collectBotTokensFromSingleUser(name string, client *telegram
 	return tokens, nil
 }
 
+func (infos *Infos) collectBotUsernamesFromMyBots(name string, client *telegram.Client, peer any, actorID int64, firstPage telegram.NewMessage) []string {
+	seen := make(map[string]struct{})
+	usernames := make([]string, 0, 16)
+	page := firstPage
+	visitedPages := make(map[string]struct{})
+
+	for pageIndex := 0; pageIndex < 100; pageIndex++ {
+		pageSignature := botFatherMarkupSignature(page)
+		if pageSignature != "" {
+			if _, ok := visitedPages[pageSignature]; ok {
+				break
+			}
+			visitedPages[pageSignature] = struct{}{}
+		}
+
+		pageUsernames := extractBotUsernamesFromMarkup(page)
+		for _, username := range pageUsernames {
+			if _, ok := seen[username]; ok {
+				continue
+			}
+			seen[username] = struct{}{}
+			usernames = append(usernames, username)
+		}
+
+		nextData, nextText, ok := extractBotFatherNextPageButton(page)
+		if !ok {
+			break
+		}
+		if _, err := page.Click(nextData); err != nil {
+			debugf("BotFather 点击下一页失败: user=%s page=%d button=%q err=%v", name, pageIndex+1, nextText, err)
+			break
+		}
+		nextPage, err := infos.waitBotFatherEditedMessage(client, peer, actorID, page.ID, pageSignature, 12*time.Second)
+		if err != nil {
+			debugf("BotFather 等待下一页失败: user=%s page=%d button=%q err=%v", name, pageIndex+1, nextText, err)
+			break
+		}
+		page = nextPage
+	}
+
+	debugf("BotFather bot 列表收集完成: user=%s pages=%d bots=%d", name, len(visitedPages), len(usernames))
+	return usernames
+}
+
 func extractBotUsernamesFromMarkup(msg telegram.NewMessage) []string {
 	markup := msg.ReplyMarkup()
 	if markup == nil {
@@ -208,6 +286,88 @@ func extractBotUsernamesFromMarkup(msg telegram.NewMessage) []string {
 		}
 	}
 	return usernames
+}
+
+func extractBotFatherNextPageButton(msg telegram.NewMessage) ([]byte, string, bool) {
+	markup := msg.ReplyMarkup()
+	if markup == nil {
+		return nil, "", false
+	}
+	inline, ok := (*markup).(*telegram.ReplyInlineMarkup)
+	if !ok || inline == nil {
+		return nil, "", false
+	}
+	for _, row := range inline.Rows {
+		if row == nil {
+			continue
+		}
+		for _, button := range row.Buttons {
+			callback, ok := button.(*telegram.KeyboardButtonCallback)
+			if !ok || callback == nil {
+				continue
+			}
+			text := strings.TrimSpace(callback.Text)
+			lower := strings.ToLower(text)
+			if strings.Contains(lower, "next") || strings.Contains(text, "下一页") || strings.Contains(text, "下页") || strings.Contains(text, "»") || strings.Contains(text, "›") || strings.Contains(text, "➡") || strings.Contains(text, "→") {
+				data := append([]byte(nil), callback.Data...)
+				return data, text, true
+			}
+		}
+	}
+	return nil, "", false
+}
+
+func botFatherMarkupSignature(msg telegram.NewMessage) string {
+	markup := msg.ReplyMarkup()
+	if markup == nil {
+		return extractMessageContent(msg)
+	}
+	inline, ok := (*markup).(*telegram.ReplyInlineMarkup)
+	if !ok || inline == nil {
+		return extractMessageContent(msg)
+	}
+	var b strings.Builder
+	b.WriteString(extractMessageContent(msg))
+	for _, row := range inline.Rows {
+		if row == nil {
+			continue
+		}
+		b.WriteByte('|')
+		for _, button := range row.Buttons {
+			callback, ok := button.(*telegram.KeyboardButtonCallback)
+			if !ok || callback == nil {
+				continue
+			}
+			b.WriteString(strings.TrimSpace(callback.Text))
+			b.WriteByte(':')
+			b.WriteString(string(callback.Data))
+			b.WriteByte(',')
+		}
+	}
+	return b.String()
+}
+
+func (infos *Infos) waitBotFatherEditedMessage(client *telegram.Client, peer any, actorID int64, messageID int32, previousSignature string, timeout time.Duration) (telegram.NewMessage, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		msgs, err := client.GetMessages(peer, &telegram.SearchOption{Limit: 10})
+		if err == nil {
+			for idx := range msgs {
+				msg := msgs[idx]
+				if msg.SenderID() == actorID {
+					continue
+				}
+				if msg.ID != messageID {
+					continue
+				}
+				if sig := botFatherMarkupSignature(msg); sig != "" && sig != previousSignature {
+					return msg, nil
+				}
+			}
+		}
+		time.Sleep(800 * time.Millisecond)
+	}
+	return telegram.NewMessage{}, fmt.Errorf("等待 BotFather 翻页消息更新超时")
 }
 
 func (infos *Infos) firstConfiguredUserClient() (UserBot, *telegram.Client, error) {

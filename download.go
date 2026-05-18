@@ -23,25 +23,25 @@ var fileNameSanitizer = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]`)
 // 支持格式: https://t.me/channelname 或 t.me/channelname
 func extractChannelNameFromURL(url string) string {
 	url = strings.TrimSpace(url)
-	
+
 	// 移除 https:// 或 http://
 	if idx := strings.Index(url, "://"); idx != -1 {
 		url = url[idx+3:]
 	}
-	
+
 	// 提取 t.me/ 之后的部分
 	if strings.Contains(url, "t.me/") {
 		url = strings.SplitN(url, "t.me/", 2)[1]
 	}
-	
+
 	// 移除查询参数和锚点
 	if idx := strings.IndexAny(url, "?#"); idx != -1 {
 		url = url[:idx]
 	}
-	
+
 	// 移除尾部斜杠
 	url = strings.TrimSuffix(url, "/")
-	
+
 	if url != "" && !strings.Contains(url, "/") {
 		return url
 	}
@@ -137,7 +137,7 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 				if client == nil && len(availableAccounts) > 0 {
 					client = infos.UserClients[availableAccounts[0]]
 				}
-				
+
 				if client != nil {
 					resolvedPeer, err = client.ResolvePeer(fmt.Sprintf("@%s", channelName))
 					if err != nil {
@@ -155,14 +155,14 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 					if rValue.Kind() == reflect.Ptr {
 						rValue = rValue.Elem()
 					}
-					
+
 					// 尝试获取 ChannelID 字段（InputPeerChannel）或 ID 字段（其他类型）
 					var channelID int64
 					idField := rValue.FieldByName("ChannelID")
 					if !idField.IsValid() {
 						idField = rValue.FieldByName("ID")
 					}
-					
+
 					if idField.IsValid() && idField.CanInt() {
 						channelID = idField.Int()
 						infos.Conf.Download.Channels[i].ID = channelID
@@ -728,25 +728,27 @@ func (infos *Infos) shouldSkipByFileName(fileName, skipPath string) bool {
 }
 
 // 复用“已存在”检测：同时检查本地文件与远端 rclone 是否存在。
-// 返回值: localExists, remoteExists, err(仅 rclone 检查错误)
-func (infos *Infos) checkExistingLocalOrRemote(ctx context.Context, outputRoot, finalPath string) (bool, bool, error) {
+// 返回值: localExists, remoteExists, remoteMatchMode, err(仅 rclone 检查错误)
+func (infos *Infos) checkExistingLocalOrRemote(ctx context.Context, outputRoot, finalPath string) (bool, bool, string, error) {
 	localExists := false
 	if _, statErr := os.Stat(finalPath); statErr == nil {
 		localExists = true
 		// 本地已存在时直接返回，避免额外的远端检查开销
-		return true, false, nil
+		return true, false, "", nil
 	}
 
 	remoteExists := false
+	remoteMatchMode := ""
 	if infos != nil && infos.Conf != nil && infos.Conf.Download.Rclone.Enabled {
-		exists, err := infos.rcloneFileExists(ctx, outputRoot, finalPath)
+		exists, matchMode, err := infos.rcloneFileExists(ctx, outputRoot, finalPath)
 		if err != nil {
-			return localExists, false, err
+			return localExists, false, "", err
 		}
 		remoteExists = exists
+		remoteMatchMode = matchMode
 	}
 
-	return localExists, remoteExists, nil
+	return localExists, remoteExists, remoteMatchMode, nil
 }
 
 func (infos *Infos) logDownloadMemberships(ctx context.Context) {
@@ -765,13 +767,13 @@ func (infos *Infos) logDownloadMemberships(ctx context.Context) {
 			continue
 		}
 		log.Printf("开始检测频道加入状态: cid=%d", task.ID)
-		
+
 		var wg sync.WaitGroup
 		for _, accountName := range accountNames {
 			wg.Add(1)
 			go func(accountName string, task DownloadChannel) {
 				defer wg.Done()
-				
+
 				client := infos.UserClients[accountName]
 				if client == nil {
 					log.Printf("账号状态: user=%s cid=%d 状态=无客户端", accountName, task.ID)

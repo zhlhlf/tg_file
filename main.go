@@ -52,37 +52,42 @@ type RelayInboxRecord struct {
 	Caption    string
 }
 
+type rcloneDirCacheEntry struct {
+	Files map[string]struct{}
+}
+
 // Infos 结构体保存了程序运行时的全局状态和资源句柄
 type Infos struct {
-	BotClient       *telegram.Client            // 主 Bot 客户端（用于与用户交互）
-	BotClients      []*telegram.Client          // 多 Bot 客户端实例
-	RelayBotClients []*telegram.Client          // 可用于分流下载的 Bot 列表
-	RelayBotLabels  []string                    // 与 RelayBotClients 对应的显示名称
-	RelayBotIDs     []int64                     // 与 RelayBotClients 对应的 Bot 用户 ID
-	RelayBotTargets []string                    // 与 RelayBotClients 对应的可解析目标（优先 @username）
-	RelayForwardSem chan struct{}               // UserBot -> Bot 转发限流，最多允许 2 个并发进入
-	UserClient      *telegram.Client            // 全局 UserBot 客户端实例（用于读取私有内容和流式传输）
-	UserClients     map[string]*telegram.Client // 多 UserBot 客户端实例
-	UserClientIDs   map[string]int64            // UserBot 名称到用户 ID 的映射
-	DefaultUserName string                      // 默认 UserBot 名称
-	Client          *telegram.Client            // 当前活跃客户端指针
-	Mutex           *sync.RWMutex               // 全局互斥锁, 保护并发安全
-	Cond            *sync.Cond                  // 条件变量, 用于等待
-	Conf            *Conf                       // 指向全局配置
-	File            *os.File                    // 日志文件句柄
-	Rex             *regexp.Regexp              // 用于解析 Telegram FloodWait 错误的正则
-	FilesPath       string                      // 配置文件存放目录
-	FilePath        string                      // 日志文件路径
-	BotID           int64                       // 主 Bot 自身的 ID
-	BotIDs          map[int64]struct{}          // 所有 Bot 自身 ID
-	Status          atomic.Int32                // UserBot 登录状态: 0 未登录, 1 等待验证码, 2 等待二步验证, 3 已登录
-	WaitUntil       atomic.Int64                // 等待结束时间
-	Code            chan string                 // 用于接收异步提交的验证码
-	Pass            chan string                 // 用于接收异步提交的二步验证密码
-	IDs             map[int64]ID                // 缓存用户 ID 到哈希的映射, 减少重复计算
-	DownloadStarted atomic.Bool                 // 自动下载任务是否已启动
-	LastDownloaded  map[int64]int32             // 每个频道已下载到的最新消息ID
-	RelayInbox      map[string][]RelayInboxRecord // Bot 入站媒体缓存: key=botID:senderID, value=最近若干条媒体
+	BotClient       *telegram.Client               // 主 Bot 客户端（用于与用户交互）
+	BotClients      []*telegram.Client             // 多 Bot 客户端实例
+	RelayBotClients []*telegram.Client             // 可用于分流下载的 Bot 列表
+	RelayBotLabels  []string                       // 与 RelayBotClients 对应的显示名称
+	RelayBotIDs     []int64                        // 与 RelayBotClients 对应的 Bot 用户 ID
+	RelayBotTargets []string                       // 与 RelayBotClients 对应的可解析目标（优先 @username）
+	RelayForwardSem chan struct{}                  // UserBot -> Bot 转发限流，最多允许 2 个并发进入
+	UserClient      *telegram.Client               // 全局 UserBot 客户端实例（用于读取私有内容和流式传输）
+	UserClients     map[string]*telegram.Client    // 多 UserBot 客户端实例
+	UserClientIDs   map[string]int64               // UserBot 名称到用户 ID 的映射
+	DefaultUserName string                         // 默认 UserBot 名称
+	Client          *telegram.Client               // 当前活跃客户端指针
+	Mutex           *sync.RWMutex                  // 全局互斥锁, 保护并发安全
+	Cond            *sync.Cond                     // 条件变量, 用于等待
+	Conf            *Conf                          // 指向全局配置
+	File            *os.File                       // 日志文件句柄
+	Rex             *regexp.Regexp                 // 用于解析 Telegram FloodWait 错误的正则
+	FilesPath       string                         // 配置文件存放目录
+	FilePath        string                         // 日志文件路径
+	BotID           int64                          // 主 Bot 自身的 ID
+	BotIDs          map[int64]struct{}             // 所有 Bot 自身 ID
+	Status          atomic.Int32                   // UserBot 登录状态: 0 未登录, 1 等待验证码, 2 等待二步验证, 3 已登录
+	WaitUntil       atomic.Int64                   // 等待结束时间
+	Code            chan string                    // 用于接收异步提交的验证码
+	Pass            chan string                    // 用于接收异步提交的二步验证密码
+	IDs             map[int64]ID                   // 缓存用户 ID 到哈希的映射, 减少重复计算
+	DownloadStarted atomic.Bool                    // 自动下载任务是否已启动
+	LastDownloaded  map[int64]int32                // 每个频道已下载到的最新消息ID
+	RelayInbox      map[string][]RelayInboxRecord  // Bot 入站媒体缓存: key=botID:senderID, value=最近若干条媒体
+	RcloneDirCache  map[string]rcloneDirCacheEntry // rclone 目录文件列表缓存: key=远端目录, value=该目录文件名集合
 }
 
 type colorizedWriter struct {
@@ -316,18 +321,18 @@ func main() {
 func newInfos(filePath, filesPath string) (*Infos, error) {
 	mutex := new(sync.RWMutex)
 	infos := &Infos{
-		FilePath:    filePath,
-		FilesPath:   filesPath,
-		Mutex:       mutex,
-		Cond:        sync.NewCond(mutex),
-		Code:        make(chan string, 1),
-		Pass:        make(chan string, 1),
-		BotIDs:      make(map[int64]struct{}, 2),
-		RelayInbox:  make(map[string][]RelayInboxRecord, 16),
+		FilePath:        filePath,
+		FilesPath:       filesPath,
+		Mutex:           mutex,
+		Cond:            sync.NewCond(mutex),
+		Code:            make(chan string, 1),
+		Pass:            make(chan string, 1),
+		BotIDs:          make(map[int64]struct{}, 2),
+		RelayInbox:      make(map[string][]RelayInboxRecord, 16),
 		RelayForwardSem: make(chan struct{}, 2),
-		UserClients: make(map[string]*telegram.Client, 2),
-		UserClientIDs: make(map[string]int64, 2),
-		Rex:         regexp.MustCompile(`(?i)(?:FLOOD(?:_PREMIUM)?_WAIT_(\d+)|WAIT(?:\s+OF)?\s*(\d+))`),
+		UserClients:     make(map[string]*telegram.Client, 2),
+		UserClientIDs:   make(map[string]int64, 2),
+		Rex:             regexp.MustCompile(`(?i)(?:FLOOD(?:_PREMIUM)?_WAIT_(\d+)|WAIT(?:\s+OF)?\s*(\d+))`),
 	}
 	stdoutWriter := colorizedWriter{w: os.Stdout, prefix: "\x1b[32m", suffix: "\x1b[0m"}
 	log.SetOutput(stdoutWriter)
@@ -379,4 +384,3 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 
 	return infos, nil
 }
-

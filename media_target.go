@@ -26,9 +26,9 @@ type mediaTargetInfo struct {
 }
 
 type mediaResolveCache struct {
-	mu                sync.RWMutex
-	messages          map[int32]telegram.NewMessage
-	groupCaptionByID  map[int64]string
+	mu               sync.RWMutex
+	messages         map[int32]telegram.NewMessage
+	groupCaptionByID map[int64]string
 }
 
 func newMediaResolveCache(messages []telegram.NewMessage) *mediaResolveCache {
@@ -70,7 +70,7 @@ func (c *mediaResolveCache) findCaptionByGroupedID(groupedID int64) string {
 			c.storeGroupCaption(groupedID, caption)
 			return caption
 		}
-		}
+	}
 	c.mu.RUnlock()
 	return ""
 }
@@ -289,13 +289,13 @@ func (infos *Infos) ensureExistingMediaTarget(ctx context.Context, outputRoot, f
 		return false, nil
 	}
 
-	localExists, remoteExists, existsErr := infos.checkExistingLocalOrRemote(ctx, outputRoot, finalPath)
+	localExists, remoteExists, remoteMatchMode, existsErr := infos.checkExistingLocalOrRemote(ctx, outputRoot, finalPath)
 	if existsErr != nil {
 		return false, existsErr
 	}
 
 	if remoteExists {
-		log.Printf("rclone远程存在，跳过 path=%s", finalPath)
+		log.Printf("rclone远程存在，跳过 match=%s path=%s", remoteMatchMode, finalPath)
 		return true, nil
 	}
 

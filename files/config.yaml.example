@@ -39,6 +39,8 @@ download:
     # configFile: C:/Users/Administrator/.config/rclone/rclone.conf
     # transferMode: move
     # remote: myremote:downloads
+    # 文件名规则变更后重扫时可开启：远端同目录只要存在相同“消息ID”的文件就跳过
+    # fuzzyMatchID: false
   channels:
     # 方式1: 只使用 join URL (推荐，系统会自动解析频道ID)
     - join: "https://t.me/channelname"
