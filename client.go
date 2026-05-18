@@ -370,10 +370,13 @@ func (infos *Infos) startBot() (err error) {
 	}
 	results := make([]botStartupResult, len(infos.Conf.BotTokens))
 	var wg sync.WaitGroup
+	initSem := make(chan struct{}, 10)
 	for idx, token := range infos.Conf.BotTokens {
 		wg.Add(1)
 		go func(idx int, token string) {
 			defer wg.Done()
+			initSem <- struct{}{}
+			defer func() { <-initSem }()
 			token = strings.TrimSpace(token)
 			sessionName := fmt.Sprintf("bot_%d", idx+1)
 			if parts := strings.SplitN(token, ":", 2); len(parts) > 0 {
