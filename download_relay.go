@@ -282,13 +282,13 @@ func (infos *Infos) ensureUserBotAlive(ctx context.Context, userClient *telegram
 	return nil
 }
 
-func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, userAccount string, counter *uint64, cache *mediaResolveCache) error {
+func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, userAccount string, counter *uint64, cache *mediaResolveCache) (*downloadResult, error) {
 	relayBot, relayLabel, relayBotID, relayTarget, err := infos.pickRelayBot(counter)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !sourceMsg.IsMedia() || sourceMsg.Media() == nil {
-		return fmt.Errorf("源消息不包含可发送媒体: cid=%d mid=%d", sourceMsg.ChatID(), sourceMsg.ID)
+		return nil, fmt.Errorf("源消息不包含可发送媒体: cid=%d mid=%d", sourceMsg.ChatID(), sourceMsg.ID)
 	}
 
 	refreshedMsg := sourceMsg
@@ -297,40 +297,40 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 		if refreshErr != nil {
 			log.Printf("源消息缺少文件信息，刷新失败，尝试保活 UserBot: cid=%d mid=%d user=%s err=%v", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr)
 			if keepAliveErr := infos.ensureUserBotAlive(ctx, userClient, userAccount); keepAliveErr != nil {
-				return fmt.Errorf("刷新源消息失败且 UserBot 保活失败: cid=%d mid=%d user=%s err=%v keepalive=%w", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr, keepAliveErr)
+				return nil, fmt.Errorf("刷新源消息失败且 UserBot 保活失败: cid=%d mid=%d user=%s err=%v keepalive=%w", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr, keepAliveErr)
 			}
 			refreshedMessages, refreshErr = userClient.GetMessages(sourceMsg.ChatID(), &telegram.SearchOption{IDs: []int32{sourceMsg.ID}})
 			if refreshErr != nil {
-				return fmt.Errorf("刷新源消息失败: cid=%d mid=%d err=%w", sourceMsg.ChatID(), sourceMsg.ID, refreshErr)
+				return nil, fmt.Errorf("刷新源消息失败: cid=%d mid=%d err=%w", sourceMsg.ChatID(), sourceMsg.ID, refreshErr)
 			}
 		}
 		if len(refreshedMessages) == 0 {
-			return fmt.Errorf("刷新源消息为空: cid=%d mid=%d", sourceMsg.ChatID(), sourceMsg.ID)
+			return nil, fmt.Errorf("刷新源消息为空: cid=%d mid=%d", sourceMsg.ChatID(), sourceMsg.ID)
 		}
 		refreshedMsg = refreshedMessages[0]
 		if !refreshedMsg.IsMedia() || refreshedMsg.Media() == nil {
-			return fmt.Errorf("刷新后的源消息不包含媒体: cid=%d mid=%d", refreshedMsg.ChatID(), refreshedMsg.ID)
+			return nil, fmt.Errorf("刷新后的源消息不包含媒体: cid=%d mid=%d", refreshedMsg.ChatID(), refreshedMsg.ID)
 		}
 	}
 
 	targetInfo, err := infos.resolveMediaTarget(ctx, userClient, outputRoot, refreshedMsg, cache)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if infos.shouldSkipByFileName(targetInfo.FileName, targetInfo.FinalPath) {
-		return nil
+		return &downloadResult{FinalPath: targetInfo.FinalPath, Handled: true}, nil
 	}
 	if handled, err := infos.ensureExistingMediaTarget(ctx, outputRoot, targetInfo.FinalPath); err != nil {
-		return err
+		return nil, err
 	} else if handled {
-		return nil
+		return &downloadResult{FinalPath: targetInfo.FinalPath, Handled: true}, nil
 	}
 
 	forwardTarget := any(relayBotID)
 	if relayTarget != "" {
 		resolvedPeer, resolveErr := userClient.ResolvePeer(relayTarget)
 		if resolveErr != nil {
-			return fmt.Errorf("解析 Bot 私聊目标失败: bot=%s target=%s err=%w", relayLabel, relayTarget, resolveErr)
+			return nil, fmt.Errorf("解析 Bot 私聊目标失败: bot=%s target=%s err=%w", relayLabel, relayTarget, resolveErr)
 		}
 		forwardTarget = resolvedPeer
 	}
@@ -349,7 +349,7 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 		return nil
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	debugf("Send返回媒体状态: bot=%s mid=%d isMedia=%v fileNil=%v mediaType=%T", relayLabel, relaySent.ID, relaySent.IsMedia(), relaySent.File == nil, relaySent.Media())
 
@@ -374,13 +374,13 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 		}
 	}
 	if senderID == 0 {
-		return fmt.Errorf("无法确定 Bot 端会话 peer: bot=%s mid=%d", relayLabel, relaySent.ID)
+		return nil, fmt.Errorf("无法确定 Bot 端会话 peer: bot=%s mid=%d", relayLabel, relaySent.ID)
 	}
 	if senderID == relayBotID {
-		return fmt.Errorf("检测到异常会话ID（与 Bot 自身相同）: bot=%s senderID=%d user=%s mid=%d", relayLabel, senderID, userAccount, relaySent.ID)
+		return nil, fmt.Errorf("检测到异常会话ID（与 Bot 自身相同）: bot=%s senderID=%d user=%s mid=%d", relayLabel, senderID, userAccount, relaySent.ID)
 	}
 	if err := infos.ensureRelayBotAlive(ctx, relayBot, relayLabel); err != nil {
-		return fmt.Errorf("回流等待前 Bot 不在线: bot=%s err=%w", relayLabel, err)
+		return nil, fmt.Errorf("回流等待前 Bot 不在线: bot=%s err=%w", relayLabel, err)
 	}
 	debugf("Bot 开始等待回流媒体: bot=%s user=%s senderID=%d mappedID=%d botID=%d mid=%d caption=%s", relayLabel, userAccount, senderID, mappedID, relayBotID, relaySent.ID, captionKey)
 	for i := 1; i <= 6; i++ {
@@ -391,14 +391,14 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 		}
 		if i == 3 || i == 6 {
 			if err := infos.ensureRelayBotAlive(ctx, relayBot, relayLabel); err != nil {
-				return fmt.Errorf("回流等待期间 Bot 失联: bot=%s attempt=%d err=%w", relayLabel, i, err)
+				return nil, fmt.Errorf("回流等待期间 Bot 失联: bot=%s attempt=%d err=%w", relayLabel, i, err)
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	if err := infos.ensureRelayBotAlive(ctx, relayBot, relayLabel); err != nil {
-		return fmt.Errorf("回流等待超时前检测到 Bot 失联: bot=%s err=%w", relayLabel, err)
+		return nil, fmt.Errorf("回流等待超时前检测到 Bot 失联: bot=%s err=%w", relayLabel, err)
 	}
 
-	return fmt.Errorf("Bot 监听缓存中未拿到媒体，放弃本次并由上层重试: bot=%s mid=%d", relayLabel, relaySent.ID)
+	return nil, fmt.Errorf("Bot 监听缓存中未拿到媒体，放弃本次并由上层重试: bot=%s mid=%d", relayLabel, relaySent.ID)
 }

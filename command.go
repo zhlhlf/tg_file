@@ -66,6 +66,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 	}
 
 	if m.Channel == nil {
+		ownerID := infos.currentAdminUserID()
 		switch {
 		case strings.HasPrefix(text, "/start"):
 			if !infos.isAllowedBotSender(m.SenderID()) {
@@ -74,7 +75,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			}
 
 			var src string
-			if m.SenderID() == infos.Conf.UserID {
+			if ownerID != 0 && m.SenderID() == ownerID {
 				switch infos.Status.Load() {
 				case 0:
 					src = "userBot 未登录, 仅使用 Bot 或发送 /phone 手机号登录 userBot"
@@ -149,7 +150,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			}
 			return nil
 		case strings.HasPrefix(text, "/qr"):
-			if m.SenderID() != infos.Conf.UserID {
+			if ownerID == 0 || m.SenderID() != ownerID {
 				sendMS(m, "你没有使用此命令的权限", nil, 60)
 				return nil
 			}
@@ -171,7 +172,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			sendMS(m, fmt.Sprintf("创建完成，共 %d 个，token 已写入 config.yaml", len(tokens)), nil, 120)
 			return nil
 		case strings.HasPrefix(text, "/phone"):
-			if m.SenderID() != infos.Conf.UserID {
+			if ownerID == 0 || m.SenderID() != ownerID {
 				sendMS(m, "你没有使用此命令的权限", nil, 60)
 				return nil
 			}
@@ -188,7 +189,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			}
 			return nil
 		case strings.HasPrefix(text, "/code"):
-			if m.SenderID() != infos.Conf.UserID {
+			if ownerID == 0 || m.SenderID() != ownerID {
 				sendMS(m, "你没有使用此命令的权限", nil, 60)
 				return nil
 			}
@@ -204,7 +205,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			sendMS(m, "提交验证码成功", nil, 60)
 			return nil
 		case strings.HasPrefix(text, "/pass") && !strings.HasPrefix(text, "/password"):
-			if m.SenderID() != infos.Conf.UserID {
+			if ownerID == 0 || m.SenderID() != ownerID {
 				sendMS(m, "你没有使用此命令的权限", nil, 60)
 				return nil
 			}

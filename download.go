@@ -592,9 +592,10 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 					}
 
 					var jobErr error
+					var result *downloadResult
 					const maxAttempts = 3
 					for attempt := 1; attempt <= maxAttempts; attempt++ {
-						jobErr = infos.downloadMessage(ctx, job.client, job.client, outputRoot, job.msg, job.msg, job.account, &relayIdx, job.cache)
+						result, jobErr = infos.downloadMessage(ctx, job.client, job.client, outputRoot, job.msg, job.msg, job.account, &relayIdx, job.cache)
 						if jobErr == nil {
 							break
 						}
@@ -604,7 +605,19 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 						}
 					}
 					if jobErr != nil {
-						log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, job.msg.ID, job.account, jobErr)
+						errorf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, job.msg.ID, job.account, jobErr)
+					} else if result != nil && !result.Handled && infos != nil && infos.Conf != nil && infos.Conf.Download.Rclone.Enabled {
+						remotePath, remoteErr := infos.rcloneRemotePath(outputRoot, result.FinalPath)
+						if remoteErr != nil {
+							errorf("rclone 路径计算失败: cid=%d mid=%d user=%s path=%s err=%v", task.ID, job.msg.ID, job.account, result.FinalPath, remoteErr)
+						} else {
+							mode := infos.rcloneTransferMode()
+							if transferErr := infos.rcloneTransferFile(ctx, result.FinalPath, remotePath, mode); transferErr != nil {
+								errorf("rclone %s 失败(已忽略): cid=%d mid=%d user=%s local=%s remote=%s err=%v", mode, task.ID, job.msg.ID, job.account, result.FinalPath, remotePath, transferErr)
+							} else {
+								log.Printf("rclone %s 完成: %s", mode, result.FinalPath)
+							}
+						}
 					}
 					wgFiles.Done()
 

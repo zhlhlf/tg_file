@@ -5,18 +5,15 @@ botTokens:
   - "789012:BBBB_BOT_TOKEN_2"
 # proxy: "socks5://127.0.0.1:7890"  # 可选: 代理服务器地址, 格式为 socks5://ip:port 或 http://ip:port, 为empty 则不使用代理
 debug: false
-userID: 0
 workers: 1
 adminIDs: []
 whiteIDs: []
 userBots:
-  - name: user1
-    phone: "+8613800000000"
+  - phone: "+8613800000000"
     # password: "2FA密码(可选)"
     # userID: 123456789
     # dc: 4
-  - name: user2
-    phone: "+8613900000000"
+  - phone: "+8613900000000"
     # password: "2FA密码(可选)"
 download:
   enabled: true

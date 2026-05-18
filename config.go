@@ -21,7 +21,6 @@ type Conf struct {
 	DC        int       `yaml:"dc,omitempty"`        // 指定连接的 Telegram 数据中心 (Data Center) ID
 	Workers   int       `yaml:"workers,omitempty"`   // 文件下载/串流时的并发协程数
 	AppID     int32     `yaml:"id"`                  // Telegram API ID, 从 my.telegram.org 获取
-	UserID    int64     `yaml:"userID"`              // 管理员的 Telegram 用户 ID
 	AdminIDs  []int64   `yaml:"adminIDs,omitempty"`  // 管理员 ID 列表, 拥有管理权限
 	WhiteIDs  []int64   `yaml:"whiteIDs,omitempty"`  // 白名单 ID 列表, 允许使用部分功能
 	UserBots  []UserBot `yaml:"userBots,omitempty"`  // 多 UserBot 账号配置
@@ -29,7 +28,7 @@ type Conf struct {
 }
 
 type UserBot struct {
-	Name     string `yaml:"name"`
+	Name     string `yaml:"-"`
 	Phone    string `yaml:"phone,omitempty"`
 	Password string `yaml:"password,omitempty"`
 	UserID   int64  `yaml:"userID,omitempty"`
@@ -75,7 +74,6 @@ type confRaw struct {
 	DC        any          `yaml:"dc,omitempty"`
 	Workers   any          `yaml:"workers,omitempty"`
 	AppID     any          `yaml:"id"`
-	UserID    any          `yaml:"userID"`
 	AdminIDs  []any        `yaml:"adminIDs,omitempty"`
 	WhiteIDs  []any        `yaml:"whiteIDs,omitempty"`
 	UserBots  []userBotRaw `yaml:"userBots,omitempty"`
@@ -83,7 +81,6 @@ type confRaw struct {
 }
 
 type userBotRaw struct {
-	Name     string `yaml:"name"`
 	Phone    string `yaml:"phone,omitempty"`
 	Password string `yaml:"password,omitempty"`
 	UserID   any    `yaml:"userID,omitempty"`
@@ -105,10 +102,6 @@ func (conf *Conf) UnmarshalYAML(value *yaml.Node) error {
 		return err
 	}
 	workers, err := parseIntField(raw.Workers, "workers")
-	if err != nil {
-		return err
-	}
-	userID, err := parseInt64Field(raw.UserID, "userID")
 	if err != nil {
 		return err
 	}
@@ -137,7 +130,6 @@ func (conf *Conf) UnmarshalYAML(value *yaml.Node) error {
 		DC:        dc,
 		Workers:   workers,
 		AppID:     appID,
-		UserID:    userID,
 		AdminIDs:  adminIDs,
 		WhiteIDs:  whiteIDs,
 		UserBots:  userBots,
@@ -215,10 +207,6 @@ func parseUserBots(raws []userBotRaw) ([]UserBot, error) {
 	}
 	bots := make([]UserBot, 0, len(raws))
 	for idx, raw := range raws {
-		name := strings.TrimSpace(raw.Name)
-		if name == "" {
-			name = fmt.Sprintf("user%d", idx+1)
-		}
 		uid, err := parseInt64Field(raw.UserID, fmt.Sprintf("userBots[%d].userID", idx))
 		if err != nil {
 			return nil, err
@@ -228,7 +216,7 @@ func parseUserBots(raws []userBotRaw) ([]UserBot, error) {
 			return nil, err
 		}
 		bots = append(bots, UserBot{
-			Name:     name,
+			Name:     fmt.Sprintf("user%d", idx+1),
 			Phone:    strings.TrimSpace(raw.Phone),
 			Password: raw.Password,
 			UserID:   uid,
@@ -243,9 +231,8 @@ func (conf *Conf) EffectiveUserBots() []UserBot {
 		return conf.UserBots
 	}
 	return []UserBot{{
-		Name:   "default",
-		UserID: conf.UserID,
-		DC:     conf.DC,
+		Name: "default",
+		DC:   conf.DC,
 	}}
 }
 

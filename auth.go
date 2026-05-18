@@ -4,14 +4,6 @@ package main
 func (infos *Infos) buildIDs() {
 	infos.Mutex.Lock()
 	defer infos.Mutex.Unlock()
-	// 检查UserID是否在IDs中
-	if infos.Conf.UserID != 0 {
-		if value, ok := infos.IDs[infos.Conf.UserID]; !ok {
-			value.IsAdmin = true
-			value.IsWhite = true
-			infos.IDs[infos.Conf.UserID] = value
-		}
-	}
 
 	// 检查AdminIDs是否在IDs中
 	for _, id := range infos.Conf.AdminIDs {
@@ -38,6 +30,9 @@ func (infos *Infos) buildIDs() {
 }
 
 func (infos *Infos) isAdmin(id int64) bool {
+	if id != 0 && id == infos.currentAdminUserID() {
+		return true
+	}
 	infos.Mutex.RLock()
 	defer infos.Mutex.RUnlock()
 	if value, ok := infos.IDs[id]; ok {
@@ -84,14 +79,7 @@ func (infos *Infos) notificationTargetID() int64 {
 	if infos == nil {
 		return 0
 	}
-	targetID := infos.Conf.UserID
-	if targetID != 0 {
-		if _, ok := infos.BotIDs[targetID]; !ok {
-			return targetID
-		}
-		debugf("通知目标 userID=%d 是 Bot，改用首个 UserBot", targetID)
-	}
-	targetID = infos.firstInternalUserBotID()
+	targetID := infos.firstInternalUserBotID()
 	if targetID != 0 {
 		return targetID
 	}

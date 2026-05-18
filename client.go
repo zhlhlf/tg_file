@@ -46,6 +46,33 @@ func (infos *Infos) clientNameForTask(task DownloadChannel) (string, *telegram.C
 	return "", nil
 }
 
+func (infos *Infos) currentAdminUserID() int64 {
+	if infos == nil || infos.Conf == nil {
+		return 0
+	}
+	if infos.UserClient != nil {
+		if me, err := infos.UserClient.GetMe(); err == nil && me != nil && me.ID != 0 {
+			return me.ID
+		}
+	}
+	if infos.DefaultUserName != "" {
+		if client := infos.UserClients[infos.DefaultUserName]; client != nil {
+			if me, err := client.GetMe(); err == nil && me != nil && me.ID != 0 {
+				return me.ID
+			}
+		}
+	}
+	for _, client := range infos.UserClients {
+		if client == nil {
+			continue
+		}
+		if me, err := client.GetMe(); err == nil && me != nil && me.ID != 0 {
+			return me.ID
+		}
+	}
+	return 0
+}
+
 // tryJoinChannel 使用 JoinChannel 按用户名、邀请链接或可解析 peer 加入频道
 func tryJoinChannel(client *telegram.Client, joinTarget string) error {
 	joinTarget = strings.TrimSpace(joinTarget)
@@ -148,7 +175,6 @@ func (infos *Infos) loginViaTerminal(client *telegram.Client, account UserBot) e
 func (infos *Infos) initUserClientsForDownloadOnly() error {
 	accounts := infos.Conf.EffectiveDownloadUserBots()
 	if len(accounts) == 0 {
-		// try to auto-load sessions from sessions/ directory
 		loaded := infos.loadSessionsDirClients()
 		if len(loaded) > 0 {
 			return nil
@@ -156,48 +182,43 @@ func (infos *Infos) initUserClientsForDownloadOnly() error {
 		return errors.New("未配置 userBots，且默认账号为空")
 	}
 
+	type userStartupResult struct {
+		account UserBot
+		client  *telegram.Client
+		me      *telegram.UserObj
+		err     error
+	}
+
 	infos.Mutex.Lock()
 	if infos.UserClients == nil {
 		infos.UserClients = make(map[string]*telegram.Client, len(accounts))
 	}
+	if infos.UserClientIDs == nil {
+		infos.UserClientIDs = make(map[string]int64, len(accounts))
+	}
 	infos.Mutex.Unlock()
 
+	results := make([]userStartupResult, len(accounts))
 	var wg sync.WaitGroup
-	var failMutex sync.Mutex
-	failCount := 0
-
-	for idx, account := range accounts {
+	for idx, origAccount := range accounts {
 		wg.Add(1)
 		go func(idx int, origAccount UserBot) {
 			defer wg.Done()
 			account := origAccount
-		// 优先使用手机号作为会话名（如果存在），否则使用配置的 name，若都不存在则使用 userN
-		phone := strings.TrimSpace(account.Phone)
-		var name string
-		if phone != "" {
-			name = sanitizeSessionName(phone)
-		} else {
-			name = strings.TrimSpace(account.Name)
-			if name == "" {
-				name = fmt.Sprintf("user%d", idx+1)
+			phone := strings.TrimSpace(account.Phone)
+			if phone != "" {
+				account.Name = sanitizeSessionName(phone)
+			} else {
+				account.Name = sanitizeSessionName(fmt.Sprintf("user%d", idx+1))
 			}
-			name = sanitizeSessionName(name)
-		}
-		account.Name = name
 
 			client, err := telegram.NewClient(infos.userClientConf(account.Name, account.DC))
 			if err != nil {
-				log.Printf("创建 UserBot[%s] 失败: %v", account.Name, err)
-				failMutex.Lock()
-				failCount++
-				failMutex.Unlock()
+				results[idx] = userStartupResult{account: account, err: fmt.Errorf("创建 UserBot[%s] 失败: %w", account.Name, err)}
 				return
 			}
 			if err = client.Connect(); err != nil {
-				log.Printf("连接 UserBot[%s] 失败: %v", account.Name, err)
-				failMutex.Lock()
-				failCount++
-				failMutex.Unlock()
+				results[idx] = userStartupResult{account: account, err: fmt.Errorf("连接 UserBot[%s] 失败: %w", account.Name, err)}
 				return
 			}
 
@@ -205,43 +226,61 @@ func (infos *Infos) initUserClientsForDownloadOnly() error {
 			if meErr != nil {
 				if strings.Contains(strings.ToUpper(meErr.Error()), "AUTH_KEY_UNREGISTERED") {
 					if err = infos.loginViaTerminal(client, account); err != nil {
-						log.Printf("UserBot[%s] 登录失败: %v", account.Name, err)
-						failMutex.Lock()
-						failCount++
-						failMutex.Unlock()
+						results[idx] = userStartupResult{account: account, err: fmt.Errorf("UserBot[%s] 登录失败: %w", account.Name, err)}
 						return
 					}
 					me, meErr = client.GetMe()
 				}
 				if meErr != nil {
-					log.Printf("获取 UserBot[%s] 信息失败: %v", account.Name, meErr)
-					failMutex.Lock()
-					failCount++
-					failMutex.Unlock()
+					results[idx] = userStartupResult{account: account, err: fmt.Errorf("获取 UserBot[%s] 信息失败: %w", account.Name, meErr)}
 					return
 				}
 			}
 
 			if account.UserID != 0 && me.ID != account.UserID {
-				log.Printf("UserBot[%s] 账号不匹配: 配置 %d, 实际 %d", account.Name, account.UserID, me.ID)
-				failMutex.Lock()
-				failCount++
-				failMutex.Unlock()
+				results[idx] = userStartupResult{account: account, err: fmt.Errorf("UserBot[%s] 账号不匹配: 配置 %d, 实际 %d", account.Name, account.UserID, me.ID)}
 				return
 			}
 
-			infos.Mutex.Lock()
-			infos.UserClients[account.Name] = client
-			infos.UserClientIDs[account.Name] = me.ID
-			if infos.DefaultUserName == "" {
-				infos.DefaultUserName = account.Name
-				infos.UserClient = client
-			}
-			infos.Mutex.Unlock()
-
-		}(idx, account)
+			results[idx] = userStartupResult{account: account, client: client, me: me}
+		}(idx, origAccount)
 	}
 	wg.Wait()
+
+	failCount := 0
+	for _, result := range results {
+		if result.err != nil {
+			log.Printf("%v", result.err)
+			failCount++
+			continue
+		}
+		if result.client == nil || result.me == nil {
+			continue
+		}
+		infos.Mutex.Lock()
+		infos.UserClients[result.account.Name] = result.client
+		infos.UserClientIDs[result.account.Name] = result.me.ID
+		infos.Mutex.Unlock()
+	}
+
+	for idx, account := range accounts {
+		name := strings.TrimSpace(account.Phone)
+		if name != "" {
+			name = sanitizeSessionName(name)
+		} else {
+			name = sanitizeSessionName(fmt.Sprintf("user%d", idx+1))
+		}
+		infos.Mutex.RLock()
+		client := infos.UserClients[name]
+		infos.Mutex.RUnlock()
+		if client != nil {
+			infos.Mutex.Lock()
+			infos.DefaultUserName = name
+			infos.UserClient = client
+			infos.Mutex.Unlock()
+			break
+		}
+	}
 
 	if infos.UserClient == nil {
 		if failCount > 0 {
@@ -335,7 +374,6 @@ func (infos *Infos) startBot() (err error) {
 		wg.Add(1)
 		go func(idx int, token string) {
 			defer wg.Done()
-
 			token = strings.TrimSpace(token)
 			sessionName := fmt.Sprintf("bot_%d", idx+1)
 			if parts := strings.SplitN(token, ":", 2); len(parts) > 0 {
@@ -349,23 +387,19 @@ func (infos *Infos) startBot() (err error) {
 				results[idx].err = fmt.Errorf("创建 Bot[%d] 客户端失败: %w", idx+1, createErr)
 				return
 			}
-
 			if connectErr := client.Connect(); connectErr != nil {
 				results[idx].err = fmt.Errorf("Bot[%d] 连接失败: %w", idx+1, connectErr)
 				return
 			}
-
 			if loginErr := client.LoginBot(token); loginErr != nil {
 				results[idx].err = fmt.Errorf("Bot[%d] 登录失败: %w", idx+1, loginErr)
 				return
 			}
-
 			me, meErr := client.GetMe()
 			if meErr != nil {
 				results[idx].err = fmt.Errorf("获取 Bot[%d] 信息失败: %w", idx+1, meErr)
 				return
 			}
-
 			results[idx].client = client
 			results[idx].me = me
 		}(idx, token)
@@ -376,15 +410,11 @@ func (infos *Infos) startBot() (err error) {
 		if result.err != nil {
 			for _, started := range results {
 				if started.client != nil {
-					if disconnectErr := started.client.Disconnect(); disconnectErr != nil {
-						log.Printf("Bot[%d] 回滚断开失败: %+v", idx+1, disconnectErr)
-					}
+					_ = started.client.Disconnect()
 				}
 			}
-			log.Printf("%+v", result.err)
 			return result.err
 		}
-
 		client := result.client
 		me := result.me
 		if me.Username != "" {
@@ -392,11 +422,7 @@ func (infos *Infos) startBot() (err error) {
 		} else {
 			log.Printf("Bot[%d] 初始化完成: id=%d", idx+1, me.ID)
 		}
-
-		// 始终注册入站媒体捕获器，供下载分流链路使用
 		client.On(telegram.OnMessage, handleRelayInboxCapture)
-
-		// 仅第一个 Bot 负责消息监听与命令注册
 		if idx == 0 {
 			client.On(telegram.OnMessage, handleBotCommand)
 			infos.setupBotCommands(client)
@@ -432,12 +458,14 @@ func (infos *Infos) setupBotCommands(client *telegram.Client) {
 			log.Printf("清空默认命令失败: %+v", err)
 		}
 
-		if infos.Conf.UserID == 0 {
-			log.Printf("userID=0，跳过为管理员设置 Bot 命令；请先登录 UserBot 或手动填写 userID")
+		adminID := infos.currentAdminUserID()
+		if adminID == 0 {
+			log.Printf("当前无可用 UserBot 可用于设置管理员 Bot 命令")
 			return
 		}
+		log.Printf("使用第一个可用 UserBot 作为管理员: %d", adminID)
 
-		userID, err := client.ResolvePeer(infos.Conf.UserID)
+		userID, err := client.ResolvePeer(adminID)
 		if err != nil {
 			log.Printf("解析用户 ID 失败: %v", err)
 			return
@@ -515,7 +543,7 @@ func (infos *Infos) setupBotCommands(client *telegram.Client) {
 		}
 
 		for _, adminID := range infos.Conf.AdminIDs {
-			if adminID == infos.Conf.UserID {
+			if adminID == infos.currentAdminUserID() {
 				continue
 			}
 			userID, err := client.ResolvePeer(adminID)
@@ -710,42 +738,24 @@ func (infos *Infos) checkStatus() (err error) {
 		return nil
 	}
 
-	if infos.Conf.UserID == 0 {
-		infos.Mutex.Lock()
-		infos.Conf.UserID = me.ID
-		infos.IDs[me.ID] = ID{IsAdmin: true, IsWhite: true}
-		if saveErr := saveConf(infos.Conf, infos.FilesPath); saveErr != nil {
-			log.Printf("自动写入 userID 失败: %+v", saveErr)
-		}
-		infos.Mutex.Unlock()
-		log.Printf("检测到 userID 未配置，已自动设置为当前 UserBot: %d", me.ID)
-	}
+	infos.Mutex.Lock()
+	infos.IDs[me.ID] = ID{IsAdmin: true, IsWhite: true}
+	infos.Mutex.Unlock()
 
-	if me.ID == infos.Conf.UserID {
-		name := me.FirstName + me.LastName
-		if me.Username != "" {
-			name = "@" + me.Username
-		}
-		sendMS(nil, fmt.Sprintf("登录成功! 用户: %s", name), nil)
-		infos.Mutex.Lock()
-		infos.Status.Store(3)
-		infos.Mutex.Unlock()
-		if infos.BotClient != nil {
-			go infos.startConfiguredDownloads(context.Background())
-		} else {
-			infos.startConfiguredDownloads(context.Background())
-		}
-		return nil
-	} else {
-		log.Printf("登录失败: 用户ID不匹配, 期望 %d, 实际 %d", infos.Conf.UserID, me.ID)
-		if infos.UserClient != nil {
-			if err := infos.UserClient.Disconnect(); err != nil {
-				log.Printf("UserBot 退出失败: %+v", err)
-			}
-		}
-		infos.resetStatus()
-		return infos.userBotClient()
+	name := me.FirstName + me.LastName
+	if me.Username != "" {
+		name = "@" + me.Username
 	}
+	sendMS(nil, fmt.Sprintf("登录成功! 用户: %s", name), nil)
+	infos.Mutex.Lock()
+	infos.Status.Store(3)
+	infos.Mutex.Unlock()
+	if infos.BotClient != nil {
+		go infos.startConfiguredDownloads(context.Background())
+	} else {
+		infos.startConfiguredDownloads(context.Background())
+	}
+	return nil
 }
 
 // resetStatus 断开 UserBot 连接并清理 cache, 将状态重置为未登录
@@ -783,6 +793,7 @@ func (infos *Infos) code() (code string, err error) {
 		sendMS(nil, err.Error(), nil, 60)
 		return "", err
 	}
+	return "", nil
 }
 
 // submitCode 接收用户通过 Bot 发送的验证码并写入通道
