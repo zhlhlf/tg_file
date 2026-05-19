@@ -355,15 +355,10 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 
 	senderID := int64(0)
 	mappedID := int64(0)
-	if me, meErr := userClient.GetMe(); meErr == nil && me != nil {
-		senderID = me.ID
-	}
 	if infos != nil && infos.UserClientIDs != nil {
 		if mid := infos.UserClientIDs[userAccount]; mid != 0 {
 			mappedID = mid
-			if senderID == 0 || senderID == relayBotID {
-				senderID = mid
-			}
+			senderID = mid
 		}
 	}
 	if relaySent.Message != nil && relaySent.Message.FromID != nil {
@@ -371,6 +366,11 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 			if senderID == 0 || senderID == relayBotID {
 				senderID = uid
 			}
+		}
+	}
+	if senderID == 0 {
+		if me, meErr := userClient.GetMe(); meErr == nil && me != nil {
+			senderID = me.ID
 		}
 	}
 	if senderID == 0 {
