@@ -561,7 +561,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 					}
 
 					latestConsumedID.Store(job.msg.ID)
-					remaining := queuedJobs.Add(-1)
+					queuedJobs.Add(-1)
 					if queueLatestID.Load()-job.msg.ID == refillThreshold {
 						if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
 							log.Printf("补充下载队列失败: cid=%d consumed=%d queuedLatest=%d err=%v", task.ID, latestConsumedID.Load(), queueLatestID.Load(), err)
