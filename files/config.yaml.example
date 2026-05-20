@@ -39,6 +39,7 @@ download:
     # configFile: C:/Users/Administrator/.config/rclone/rclone.conf
     # transferMode: move
     # remote: myremote:downloads
+    # checkRemote: myremote:old_downloads  # 可选: 只用于远端存在性检查；为空时使用 remote
     # 文件名规则变更后重扫时可开启：远端同目录只要存在相同“消息ID”的文件就跳过
     # fuzzyMatchID: false
   channels:

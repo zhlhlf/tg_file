@@ -54,6 +54,7 @@ type Rclone struct {
 	Enabled      bool   `yaml:"enabled"`
 	ConfigFile   string `yaml:"configFile,omitempty"`
 	Remote       string `yaml:"remote,omitempty"`
+	CheckRemote  string `yaml:"checkRemote,omitempty"`  // 远端存在性检查根路径；为空时使用 remote
 	TransferMode string `yaml:"transferMode,omitempty"` // move 或 copy, 默认 move
 	FuzzyMatchID bool   `yaml:"fuzzyMatchID,omitempty"` // 远端存在性检查时只按消息 ID 匹配，适合文件名规则变更后重扫
 }

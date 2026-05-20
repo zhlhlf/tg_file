@@ -41,7 +41,7 @@ func (infos *Infos) rcloneFileExists(ctx context.Context, outputRoot, finalPath 
 	if !rcloneConf.Enabled {
 		return false, "", nil
 	}
-	remoteRoot := strings.TrimSpace(rcloneConf.Remote)
+	remoteRoot := rcloneConf.checkRemoteRoot()
 	if remoteRoot == "" {
 		return false, "", fmt.Errorf("rclone 已启用但未配置 remote")
 	}
@@ -80,6 +80,13 @@ func (infos *Infos) rcloneFileExists(ctx context.Context, outputRoot, finalPath 
 		return false, "", err
 	}
 	return true, "精确", nil
+}
+
+func (conf Rclone) checkRemoteRoot() string {
+	if checkRemote := strings.TrimSpace(conf.CheckRemote); checkRemote != "" {
+		return checkRemote
+	}
+	return strings.TrimSpace(conf.Remote)
 }
 
 func (infos *Infos) rcloneListDirFiles(ctx context.Context, remoteDir string) (map[string]struct{}, error) {
