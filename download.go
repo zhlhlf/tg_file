@@ -462,11 +462,10 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 
 	jobs := make(chan downloadJob, bs)
 	const refillThreshold int32 = 30
-	var queueLatestID atomic.Int32
-	var latestConsumedID atomic.Int32
 	var queuedJobs atomic.Int32
 	var exhausted atomic.Bool
 	var fetchMu sync.Mutex
+	var fetchStarted bool
 	var closeJobsOnce sync.Once
 	var workerWG sync.WaitGroup
 	nextCursor := start
@@ -485,6 +484,18 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	fetchNextJobs := func() error {
 		fetchMu.Lock()
 		defer fetchMu.Unlock()
+
+		if fetchStarted {
+			timer := time.NewTimer(time.Second)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+			}
+		} else {
+			fetchStarted = true
+		}
 
 		for nextCursor <= latest {
 			select {
@@ -530,7 +541,6 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 					wgFiles.Done()
 					return ctx.Err()
 				case jobs <- job:
-					queueLatestID.Store(msg.ID)
 					enqueued++
 				}
 			}
@@ -560,11 +570,10 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 						return
 					}
 
-					latestConsumedID.Store(job.msg.ID)
-					queuedJobs.Add(-1)
-					if queueLatestID.Load()-job.msg.ID == refillThreshold {
+					remaining := queuedJobs.Add(-1)
+					if remaining == refillThreshold {
 						if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
-							log.Printf("补充下载队列失败: cid=%d consumed=%d queuedLatest=%d err=%v", task.ID, latestConsumedID.Load(), queueLatestID.Load(), err)
+							log.Printf("补充下载队列失败: cid=%d mid=%d queued=%d err=%v", task.ID, job.msg.ID, remaining, err)
 						}
 					}
 
