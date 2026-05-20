@@ -464,9 +464,8 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	const refillThreshold int32 = 30
 	var queuedJobs atomic.Int32
 	var exhausted atomic.Bool
-	var fetchMu sync.Mutex
-	var fetchStarted bool
 	var closeJobsOnce sync.Once
+	var producerWG sync.WaitGroup
 	var workerWG sync.WaitGroup
 	nextCursor := start
 
@@ -482,21 +481,6 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	}()
 
 	fetchNextJobs := func() error {
-		fetchMu.Lock()
-		defer fetchMu.Unlock()
-
-		if fetchStarted {
-			timer := time.NewTimer(time.Second)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-timer.C:
-			}
-		} else {
-			fetchStarted = true
-		}
-
 		for nextCursor <= latest {
 			select {
 			case <-ctx.Done():
@@ -530,6 +514,20 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 
 			enqueued := 0
 			for _, msg := range ms {
+				if msg.File == nil || !msg.IsMedia() {
+					continue
+				}
+
+				msgType, ok := detectMessageType(msg)
+				if !ok {
+					continue
+				}
+				if !allowAll {
+					if _, exists := typeFilter[msgType]; !exists {
+						continue
+					}
+				}
+
 				fileAccount, fileClient := infos.selectFileDownloadClient(task, accountName, client, availableAccounts, &rrIdx)
 				wgFiles.Add(1)
 				queuedJobs.Add(1)
@@ -557,6 +555,53 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 		return nil
 	}
 
+	producerWG.Add(1)
+	go func() {
+		defer producerWG.Done()
+
+		if err := fetchNextJobs(); err != nil {
+			if ctx.Err() == nil {
+				log.Printf("初始化下载队列失败: cid=%d err=%v", task.ID, err)
+			}
+			if queuedJobs.Load() == 0 {
+				exhausted.Store(true)
+				closeJobs()
+			}
+			return
+		}
+
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			if exhausted.Load() {
+				if queuedJobs.Load() == 0 {
+					closeJobs()
+					return
+				}
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if exhausted.Load() {
+					if queuedJobs.Load() == 0 {
+						closeJobs()
+						return
+					}
+					continue
+				}
+				if queuedJobs.Load() >= refillThreshold {
+					continue
+				}
+				if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
+					log.Printf("补充下载队列失败: cid=%d queued=%d err=%v", task.ID, queuedJobs.Load(), err)
+				}
+			}
+		}
+	}()
+
 	workerWG.Add(workerCount)
 	for i := 0; i < workerCount; i++ {
 		go func() {
@@ -570,38 +615,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 						return
 					}
 
-					remaining := queuedJobs.Add(-1)
-					if remaining == refillThreshold {
-						if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
-							log.Printf("补充下载队列失败: cid=%d mid=%d queued=%d err=%v", task.ID, job.msg.ID, remaining, err)
-						}
-					}
-
-					if job.msg.File == nil || !job.msg.IsMedia() {
-						wgFiles.Done()
-						if exhausted.Load() && queuedJobs.Load() == 0 {
-							closeJobs()
-						}
-						continue
-					}
-
-					msgType, ok := detectMessageType(job.msg)
-					if !ok {
-						wgFiles.Done()
-						if exhausted.Load() && queuedJobs.Load() == 0 {
-							closeJobs()
-						}
-						continue
-					}
-					if !allowAll {
-						if _, exists := typeFilter[msgType]; !exists {
-							wgFiles.Done()
-							if exhausted.Load() && queuedJobs.Load() == 0 {
-								closeJobs()
-							}
-							continue
-						}
-					}
+					queuedJobs.Add(-1)
 
 					if job.client == nil {
 						log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, job.msg.ID, job.account, fmt.Errorf("未找到可用客户端"))
@@ -650,24 +664,8 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 		}()
 	}
 
-	for queuedJobs.Load() < refillThreshold && !exhausted.Load() {
-		if err := fetchNextJobs(); err != nil {
-			if ctx.Err() != nil {
-				break
-			}
-			log.Printf("初始化下载队列失败: cid=%d err=%v", task.ID, err)
-			break
-		}
-		if queuedJobs.Load() == 0 {
-			break
-		}
-	}
-
-	if queuedJobs.Load() == 0 && exhausted.Load() {
-		closeJobs()
-	}
-
 	workerWG.Wait()
+	producerWG.Wait()
 	return ctx.Err()
 }
 
