@@ -519,20 +519,6 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 
 			enqueued := 0
 			for _, msg := range ms {
-				if msg.File == nil || !msg.IsMedia() {
-					continue
-				}
-
-				msgType, ok := detectMessageType(msg)
-				if !ok {
-					continue
-				}
-				if !allowAll {
-					if _, exists := typeFilter[msgType]; !exists {
-						continue
-					}
-				}
-
 				fileAccount, fileClient := infos.selectFileDownloadClient(task, accountName, client, availableAccounts, &rrIdx)
 				wgFiles.Add(1)
 				queuedJobs.Add(1)
@@ -576,9 +562,35 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 
 					latestConsumedID.Store(job.msg.ID)
 					remaining := queuedJobs.Add(-1)
-					if remaining == refillThreshold {
+					if queueLatestID.Load()-job.msg.ID == refillThreshold {
 						if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
 							log.Printf("补充下载队列失败: cid=%d consumed=%d queuedLatest=%d err=%v", task.ID, latestConsumedID.Load(), queueLatestID.Load(), err)
+						}
+					}
+
+					if job.msg.File == nil || !job.msg.IsMedia() {
+						wgFiles.Done()
+						if exhausted.Load() && queuedJobs.Load() == 0 {
+							closeJobs()
+						}
+						continue
+					}
+
+					msgType, ok := detectMessageType(job.msg)
+					if !ok {
+						wgFiles.Done()
+						if exhausted.Load() && queuedJobs.Load() == 0 {
+							closeJobs()
+						}
+						continue
+					}
+					if !allowAll {
+						if _, exists := typeFilter[msgType]; !exists {
+							wgFiles.Done()
+							if exhausted.Load() && queuedJobs.Load() == 0 {
+								closeJobs()
+							}
+							continue
 						}
 					}
 
