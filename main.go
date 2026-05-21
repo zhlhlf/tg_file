@@ -53,6 +53,7 @@ type RelayInboxRecord struct {
 }
 
 type rcloneDirCacheEntry struct {
+	Dir   string
 	Files map[string]struct{}
 }
 
@@ -87,7 +88,7 @@ type Infos struct {
 	DownloadStarted atomic.Bool                    // 自动下载任务是否已启动
 	LastDownloaded  map[int64]int32                // 每个频道已下载到的最新消息ID
 	RelayInbox      map[string][]RelayInboxRecord  // Bot 入站媒体缓存: key=botID:senderID, value=最近若干条媒体
-	RcloneDirCache  map[string]rcloneDirCacheEntry // rclone 目录文件列表缓存: key=远端目录, value=该目录文件名集合
+	RcloneDirCache  map[string]rcloneDirCacheEntry // rclone 目录文件列表缓存: key=检查源槽位, value=该槽位当前目录文件名集合
 }
 
 type colorizedWriter struct {

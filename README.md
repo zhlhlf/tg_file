@@ -224,7 +224,9 @@ download:
     configFile: C:/Users/Administrator/.config/rclone/rclone.conf
     transferMode: move
     remote: myremote:downloads
-    checkRemote: myremote:old_downloads
+    checkRemote:
+      - myremote:old_downloads
+      - myremote:backup_downloads
 ```
 
 字段说明：
@@ -232,7 +234,7 @@ download:
 - `enabled`：是否启用 rclone
 - `configFile`：rclone 配置文件路径，可选
 - `remote`：远端根路径，例如 `myremote:downloads`
-- `checkRemote`：远端存在性检查根路径，可选；有值时下载前检查使用它，上传/转存仍使用 `remote`
+- `checkRemote`：远端存在性检查根路径列表，可选；为空列表时使用 `remote`；配置多个源时下载前会逐个检查，上传/转存仍使用 `remote`
 - `transferMode`：`move` 或 `copy`，默认 `move`
 
 需要确保系统环境中可以直接执行 `rclone` 命令。

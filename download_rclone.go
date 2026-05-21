@@ -41,63 +41,85 @@ func (infos *Infos) rcloneFileExists(ctx context.Context, outputRoot, finalPath 
 	if !rcloneConf.Enabled {
 		return false, "", nil
 	}
-	remoteRoot := rcloneConf.checkRemoteRoot()
-	if remoteRoot == "" {
+	remoteRoots := rcloneConf.checkRemoteRoots()
+	if len(remoteRoots) == 0 {
 		return false, "", fmt.Errorf("rclone 已启用但未配置 remote")
 	}
 	relPath, err := filepath.Rel(outputRoot, finalPath)
 	if err != nil {
 		return false, "", err
 	}
-	remotePath := joinRclonePath(remoteRoot, filepath.ToSlash(relPath))
-	remoteDir, remoteName := splitRclonePath(remotePath)
-	if remoteName == "" {
-		return false, "", nil
-	}
+	for idx, remoteRoot := range remoteRoots {
+		remotePath := joinRclonePath(remoteRoot, filepath.ToSlash(relPath))
+		remoteDir, remoteName := splitRclonePath(remotePath)
+		if remoteName == "" {
+			continue
+		}
 
-	files, err := infos.rcloneListDirFiles(ctx, remoteDir)
-	if err == nil {
-		if _, ok := files[remoteName]; ok {
-			return true, "精确", nil
+		cacheSlot := fmt.Sprintf("%d", idx)
+		files, err := infos.rcloneListDirFiles(ctx, cacheSlot, remoteDir)
+		if err == nil {
+			if _, ok := files[remoteName]; ok {
+				return true, fmt.Sprintf("精确[%d]", idx+1), nil
+			}
+			if rcloneConf.FuzzyMatchID && rcloneNameMatchesMessageID(remoteName, files) {
+				return true, fmt.Sprintf("模糊ID[%d]", idx+1), nil
+			}
+			continue
 		}
-		if rcloneConf.FuzzyMatchID && rcloneNameMatchesMessageID(remoteName, files) {
-			return true, "模糊ID", nil
-		}
-		return false, "", nil
-	}
-	debugf("rclone目录缓存检查失败，回退单文件检查: dir=%s file=%s err=%v", remoteDir, remoteName, err)
+		debugf("rclone目录缓存检查失败，回退单文件检查: dir=%s file=%s err=%v", remoteDir, remoteName, err)
 
-	args := infos.rcloneArgs("lsjson", "--stat", remotePath)
-	cmd := exec.CommandContext(ctx, "rclone", args...)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		text := strings.TrimSpace(string(output))
-		if rcloneRemoteDirNotFoundText.MatchString(text) {
-			return false, "", nil
+		args := infos.rcloneArgs("lsjson", "--stat", remotePath)
+		cmd := exec.CommandContext(ctx, "rclone", args...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			text := strings.TrimSpace(string(output))
+			if rcloneRemoteDirNotFoundText.MatchString(text) {
+				continue
+			}
+			if text != "" {
+				return false, "", fmt.Errorf("%w: %s", err, text)
+			}
+			return false, "", err
 		}
-		if text != "" {
-			return false, "", fmt.Errorf("%w: %s", err, text)
-		}
-		return false, "", err
+		return true, fmt.Sprintf("精确[%d]", idx+1), nil
 	}
-	return true, "精确", nil
+	return false, "", nil
 }
 
-func (conf Rclone) checkRemoteRoot() string {
-	if checkRemote := strings.TrimSpace(conf.CheckRemote); checkRemote != "" {
-		return checkRemote
+func (conf Rclone) checkRemoteRoots() []string {
+	if len(conf.CheckRemote) > 0 {
+		roots := make([]string, 0, len(conf.CheckRemote))
+		for _, checkRemote := range conf.CheckRemote {
+			root := strings.TrimSpace(checkRemote)
+			if root == "" {
+				continue
+			}
+			roots = append(roots, root)
+		}
+		if len(roots) > 0 {
+			return roots
+		}
 	}
-	return strings.TrimSpace(conf.Remote)
+	remote := strings.TrimSpace(conf.Remote)
+	if remote == "" {
+		return nil
+	}
+	return []string{remote}
 }
 
-func (infos *Infos) rcloneListDirFiles(ctx context.Context, remoteDir string) (map[string]struct{}, error) {
+func (infos *Infos) rcloneListDirFiles(ctx context.Context, cacheSlot, remoteDir string) (map[string]struct{}, error) {
+	cacheSlot = strings.TrimSpace(cacheSlot)
 	remoteDir = strings.TrimSpace(remoteDir)
+	if cacheSlot == "" {
+		return nil, fmt.Errorf("rclone 缓存槽位为空")
+	}
 	if remoteDir == "" {
 		return nil, fmt.Errorf("rclone 目录为空")
 	}
 
 	infos.Mutex.RLock()
 	if infos.RcloneDirCache != nil {
-		if entry, ok := infos.RcloneDirCache[remoteDir]; ok {
+		if entry, ok := infos.RcloneDirCache[cacheSlot]; ok && entry.Dir == remoteDir {
 			files := entry.Files
 			infos.Mutex.RUnlock()
 			return files, nil
@@ -112,7 +134,7 @@ func (infos *Infos) rcloneListDirFiles(ctx context.Context, remoteDir string) (m
 		text := strings.TrimSpace(string(output))
 		if rcloneRemoteDirNotFoundText.MatchString(text) {
 			files := map[string]struct{}{}
-			infos.storeRcloneDirCache(remoteDir, files)
+			infos.storeRcloneDirCache(cacheSlot, remoteDir, files)
 			return files, nil
 		}
 		if text != "" {
@@ -133,19 +155,20 @@ func (infos *Infos) rcloneListDirFiles(ctx context.Context, remoteDir string) (m
 		}
 		files[name] = struct{}{}
 	}
-	infos.storeRcloneDirCache(remoteDir, files)
+	infos.storeRcloneDirCache(cacheSlot, remoteDir, files)
 	return files, nil
 }
 
-func (infos *Infos) storeRcloneDirCache(remoteDir string, files map[string]struct{}) {
+func (infos *Infos) storeRcloneDirCache(cacheSlot, remoteDir string, files map[string]struct{}) {
 	if infos == nil || infos.Mutex == nil {
 		return
 	}
 	infos.Mutex.Lock()
-	// 只保留当前检查目录的缓存：当扫描到不同目录时，旧目录缓存立即失效。
-	infos.RcloneDirCache = map[string]rcloneDirCacheEntry{
-		remoteDir: {Files: files},
+	// 缓存槽按 checkRemote 列表索引保存；列表有几个有效源，就最多有几个槽。
+	if infos.RcloneDirCache == nil {
+		infos.RcloneDirCache = make(map[string]rcloneDirCacheEntry)
 	}
+	infos.RcloneDirCache[cacheSlot] = rcloneDirCacheEntry{Dir: remoteDir, Files: files}
 	infos.Mutex.Unlock()
 }
 

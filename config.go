@@ -51,12 +51,41 @@ type Download struct {
 }
 
 type Rclone struct {
-	Enabled      bool   `yaml:"enabled"`
-	ConfigFile   string `yaml:"configFile,omitempty"`
-	Remote       string `yaml:"remote,omitempty"`
-	CheckRemote  string `yaml:"checkRemote,omitempty"`  // 远端存在性检查根路径；为空时使用 remote
-	TransferMode string `yaml:"transferMode,omitempty"` // move 或 copy, 默认 move
-	FuzzyMatchID bool   `yaml:"fuzzyMatchID,omitempty"` // 远端存在性检查时只按消息 ID 匹配，适合文件名规则变更后重扫
+	Enabled      bool     `yaml:"enabled"`
+	ConfigFile   string   `yaml:"configFile,omitempty"`
+	Remote       string   `yaml:"remote,omitempty"`
+	CheckRemote  []string `yaml:"checkRemote,omitempty"`  // 远端存在性检查根路径列表；为空时使用 remote
+	TransferMode string   `yaml:"transferMode,omitempty"` // move 或 copy, 默认 move
+	FuzzyMatchID bool     `yaml:"fuzzyMatchID,omitempty"` // 远端存在性检查时只按消息 ID 匹配，适合文件名规则变更后重扫
+}
+
+type rcloneRaw struct {
+	Enabled      bool      `yaml:"enabled"`
+	ConfigFile   string    `yaml:"configFile,omitempty"`
+	Remote       string    `yaml:"remote,omitempty"`
+	CheckRemote  yaml.Node `yaml:"checkRemote,omitempty"`
+	TransferMode string    `yaml:"transferMode,omitempty"`
+	FuzzyMatchID bool      `yaml:"fuzzyMatchID,omitempty"`
+}
+
+func (conf *Rclone) UnmarshalYAML(value *yaml.Node) error {
+	var raw rcloneRaw
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	checkRemote, err := parseStringListNode(raw.CheckRemote, "checkRemote")
+	if err != nil {
+		return err
+	}
+	*conf = Rclone{
+		Enabled:      raw.Enabled,
+		ConfigFile:   raw.ConfigFile,
+		Remote:       raw.Remote,
+		CheckRemote:  checkRemote,
+		TransferMode: raw.TransferMode,
+		FuzzyMatchID: raw.FuzzyMatchID,
+	}
+	return nil
 }
 
 type DownloadChannel struct {
@@ -169,6 +198,36 @@ func parseStringSliceField(v any, field string) ([]string, error) {
 		return result, nil
 	default:
 		return nil, fmt.Errorf("字段 %s 类型 %T 不支持，需为字符串或字符串数组", field, v)
+	}
+}
+
+func parseStringListNode(node yaml.Node, field string) ([]string, error) {
+	switch node.Kind {
+	case 0:
+		return nil, nil
+	case yaml.ScalarNode:
+		src := strings.TrimSpace(node.Value)
+		if src == "" {
+			return nil, nil
+		}
+		return []string{src}, nil
+	case yaml.SequenceNode:
+		result := make([]string, 0, len(node.Content))
+		for idx, item := range node.Content {
+			if item.Kind != yaml.ScalarNode {
+				return nil, fmt.Errorf("字段 %s[%d] 类型不支持，需为字符串", field, idx)
+			}
+			str := strings.TrimSpace(item.Value)
+			if str != "" {
+				result = append(result, str)
+			}
+		}
+		if len(result) == 0 {
+			return nil, nil
+		}
+		return result, nil
+	default:
+		return nil, fmt.Errorf("字段 %s 类型不支持，需为字符串或字符串数组", field)
 	}
 }
 
