@@ -385,32 +385,84 @@ func (infos *Infos) startBot() (err error) {
 				}
 			}
 
-			client, createErr := telegram.NewClient(botConf(sessionName))
-			if createErr != nil {
-				results[idx].err = fmt.Errorf("创建 Bot[%d] 客户端失败: %w", idx+1, createErr)
+			resultCh := make(chan botStartupResult, 1)
+			timedOut := make(chan struct{})
+			go func() {
+				var result botStartupResult
+				client, createErr := telegram.NewClient(botConf(sessionName))
+				if createErr != nil {
+					result.err = fmt.Errorf("创建 Bot[%d] 客户端失败: %w", idx+1, createErr)
+					select {
+					case resultCh <- result:
+					case <-timedOut:
+					}
+					return
+				}
+				if connectErr := client.Connect(); connectErr != nil {
+					result.err = fmt.Errorf("Bot[%d] 连接失败: %w", idx+1, connectErr)
+					select {
+					case resultCh <- result:
+					case <-timedOut:
+					}
+					return
+				}
+				if loginErr := client.LoginBot(token); loginErr != nil {
+					result.err = fmt.Errorf("Bot[%d] 登录失败: %w", idx+1, loginErr)
+					_ = client.Disconnect()
+					select {
+					case resultCh <- result:
+					case <-timedOut:
+					}
+					return
+				}
+				me, meErr := client.GetMe()
+				if meErr != nil {
+					result.err = fmt.Errorf("获取 Bot[%d] 信息失败: %w", idx+1, meErr)
+					_ = client.Disconnect()
+					select {
+					case resultCh <- result:
+					case <-timedOut:
+					}
+					return
+				}
+				result.client = client
+				result.me = me
+				select {
+				case resultCh <- result:
+				case <-timedOut:
+					_ = client.Disconnect()
+				}
+			}()
+
+			select {
+			case result := <-resultCh:
+				results[idx] = result
+				return
+			case <-time.After(10 * time.Second):
+				close(timedOut)
+				results[idx].err = fmt.Errorf("Bot[%d] 初始化超过 10 秒，已跳过", idx+1)
 				return
 			}
-			if connectErr := client.Connect(); connectErr != nil {
-				results[idx].err = fmt.Errorf("Bot[%d] 连接失败: %w", idx+1, connectErr)
-				return
-			}
-			if loginErr := client.LoginBot(token); loginErr != nil {
-				results[idx].err = fmt.Errorf("Bot[%d] 登录失败: %w", idx+1, loginErr)
-				return
-			}
-			me, meErr := client.GetMe()
-			if meErr != nil {
-				results[idx].err = fmt.Errorf("获取 Bot[%d] 信息失败: %w", idx+1, meErr)
-				return
-			}
-			results[idx].client = client
-			results[idx].me = me
 		}(idx, token)
 	}
 	wg.Wait()
+	totalBots := len(results)
+	successCount := 0
 
 	for idx, result := range results {
 		if result.err != nil {
+			warnf("Bot[%d] 初始化失败: %v", idx+1, result.err)
+			continue
+		}
+		successCount++
+	}
+	log.Printf("Bot 初始化完成: 成功 %d/%d", successCount, totalBots)
+
+	for idx, result := range results {
+		if result.err != nil {
+			if strings.Contains(result.err.Error(), "初始化超过 10 秒") {
+				continue
+			}
 			for _, started := range results {
 				if started.client != nil {
 					_ = started.client.Disconnect()
@@ -420,13 +472,8 @@ func (infos *Infos) startBot() (err error) {
 		}
 		client := result.client
 		me := result.me
-		if me.Username != "" {
-			log.Printf("Bot[%d] 初始化完成: id=%d username=@%s", idx+1, me.ID, me.Username)
-		} else {
-			log.Printf("Bot[%d] 初始化完成: id=%d", idx+1, me.ID)
-		}
 		client.On(telegram.OnMessage, handleRelayInboxCapture)
-		if idx == 0 {
+		if len(clients) == 0 {
 			client.On(telegram.OnMessage, handleBotCommand)
 			infos.setupBotCommands(client)
 		}
@@ -438,6 +485,9 @@ func (infos *Infos) startBot() (err error) {
 		} else {
 			relayBotTargets = append(relayBotTargets, "")
 		}
+	}
+	if len(clients) == 0 {
+		return fmt.Errorf("没有可用 Bot：全部初始化失败或超时")
 	}
 
 	infos.Mutex.Lock()

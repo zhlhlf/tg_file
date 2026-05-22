@@ -19,7 +19,6 @@ func (infos *Infos) prepareRelayBots() error {
 	infos.RelayBotLabels = nil
 	infos.RelayBotIDs = nil
 	infos.RelayBotTargets = nil
-	availableBots := make([]string, 0, len(infos.BotClients))
 	if len(infos.BotClients) == 0 {
 		return fmt.Errorf("未配置任何 Bot")
 	}
@@ -40,12 +39,11 @@ func (infos *Infos) prepareRelayBots() error {
 			target = "@" + me.Username
 		}
 		infos.RelayBotTargets = append(infos.RelayBotTargets, target)
-		availableBots = append(availableBots, me.Username)
 	}
 	if len(infos.RelayBotClients) == 0 {
 		return fmt.Errorf("没有任何可用 Bot 用于分流下载")
 	}
-	log.Printf("可用bot列表(%d): [%s]", len(availableBots), strings.Join(availableBots, ","))
+	log.Printf("可用 Bot 数量: %d/%d", len(infos.RelayBotClients), len(infos.BotClients))
 	return nil
 }
 
