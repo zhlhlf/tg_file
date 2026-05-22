@@ -6,6 +6,7 @@ import (
 
 const (
 	logColorBlue   = "\x1b[34m"
+	logColorYellow = "\x1b[33m"
 	logColorRed    = "\x1b[31m"
 	logColorReset  = "\x1b[0m"
 )
@@ -25,4 +26,8 @@ func debugf(format string, args ...any) {
 
 func errorf(format string, args ...any) {
 	colorLogf(logColorRed, format, args...)
+}
+
+func warnf(format string, args ...any) {
+	colorLogf(logColorYellow, format, args...)
 }

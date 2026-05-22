@@ -156,7 +156,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 					continue
 				}
 				if noSizeChangeAbort.CompareAndSwap(false, true) {
-					log.Printf("下载停滞，20秒内文件大小无变化，取消本次下载: bot=%s cap=%q size=%d sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", botLabel, botCaption, currentSize, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
+					warnf("下载停滞，20秒内文件大小无变化，取消本次下载: bot=%s cap=%q size=%d sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", botLabel, botCaption, currentSize, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
 					cancel()
 				}
 				return
