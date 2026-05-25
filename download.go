@@ -110,7 +110,7 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 
 	log.Printf("自动下载开始执行, 频道数: %d, 输出目录: %s", len(infos.Conf.Download.Channels), outputRoot)
 	if len(infos.RelayBotClients) > 0 {
-		log.Printf("已启用 Bot 分流下载: 可用Bot=%d", len(infos.RelayBotClients))
+		log.Printf("已启用 Bot 分流下载: 可用Bot: %d", len(infos.RelayBotClients))
 	}
 	infos.logDownloadMemberships(ctx)
 	// 并发控制: `concurrent` 限制同时进行的文件下载数量（不是频道）
@@ -126,7 +126,7 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 
 	// 自动解析缺少 ID 的频道 URL
 	for i, task := range infos.Conf.Download.Channels {
-		log.Printf("频道[%d]: ID=%d, Join=%s", i, task.ID, task.Join)
+		log.Printf("频道[%d]: ID: %d, Join: %s", i, task.ID, task.Join)
 		if task.ID == 0 && task.Join != "" {
 			channelName := extractChannelNameFromURL(task.Join)
 			if channelName != "" {
@@ -221,16 +221,16 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 							}
 							// 使用解析到的 peerCID 检查该账号是否能访问频道
 							if _, err := infos.getLatestMessageID(c, peerCID); err == nil {
-								log.Printf("账号 %s 已加入频道 cid=%d", an, peerCID)
+								log.Printf("账号 %s 已加入频道 cid: %d", an, peerCID)
 							} else {
-								log.Printf("账号 %s 未加入频道 cid=%d: %v", an, peerCID, err)
+								log.Printf("账号 %s 未加入频道 cid: %d: %v", an, peerCID, err)
 								// 若未加入且允许强制加入，则尝试加入
 								if infos.Conf.Download.ForceJoin || task.ForceJoin {
 									if jerr := tryJoinChannel(c, task.Join); jerr == nil {
 										if _, err2 := infos.getLatestMessageID(c, peerCID); err2 == nil {
-											log.Printf("账号 %s 成功加入频道 cid=%d", an, peerCID)
+											log.Printf("账号 %s 成功加入频道 cid: %d", an, peerCID)
 										} else {
-											log.Printf("账号 %s 加入后仍不可用 cid=%d: %v", an, peerCID, err2)
+											log.Printf("账号 %s 加入后仍不可用 cid: %d: %v", an, peerCID, err2)
 										}
 									} else {
 										log.Printf("账号 %s 尝试加入频道失败: %v", an, jerr)
@@ -256,7 +256,7 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 		candidateAccounts := infos.channelCandidateAccounts(task, availableAccounts, &rrIdx)
 
 		if len(candidateAccounts) == 0 {
-			log.Printf("频道下载跳过: cid=%d user=%s, 未找到可用 UserBot", task.ID, task.User)
+			log.Printf("频道下载跳过: cid: %d user: %s, 未找到可用 UserBot", task.ID, task.User)
 			continue
 		}
 
@@ -266,16 +266,16 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 			if client == nil {
 				if client == nil {
 					lastErr = fmt.Errorf("未找到可用 UserBot")
-					log.Printf("频道下载失败: cid=%d user=%s err=%v", task.ID, accountName, lastErr)
+					log.Printf("频道下载失败: cid: %d user: %s err: %v", task.ID, accountName, lastErr)
 					continue
 				}
 			}
 
 			if err := infos.downloadChannelRange(ctx, client, outputRoot, task, sem, &wgFiles, accountName); err != nil {
 				lastErr = err
-				log.Printf("频道下载失败: cid=%d user=%s err=%v", task.ID, accountName, err)
+				log.Printf("频道下载失败: cid: %d user: %s err: %v", task.ID, accountName, err)
 				if strings.TrimSpace(task.User) == "" && len(infos.RelayBotClients) > 0 && idx < len(candidateAccounts)-1 {
-					log.Printf("频道下载切换下一个账号: cid=%d from=%s to=%s", task.ID, accountName, candidateAccounts[idx+1])
+					log.Printf("频道下载切换下一个账号: cid: %d from: %s to: %s", task.ID, accountName, candidateAccounts[idx+1])
 					continue
 				}
 			} else {
@@ -347,7 +347,7 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 						infos.Mutex.Unlock()
 						if latest > last {
 							from := last + 1
-							log.Printf("发现频道新消息: cid=%d last=%d latest=%d, 开始增量下载", task.ID, last, latest)
+							log.Printf("发现频道新消息: cid: %d last: %d latest: %d, 开始增量下载", task.ID, last, latest)
 							// 为本次增量下载创建独立的并发控制与等待组
 							concurrency := infos.Conf.Download.Concurrent
 							if concurrency <= 0 {
@@ -366,7 +366,7 @@ func (infos *Infos) startConfiguredDownloads(ctx context.Context) {
 								infos.LastDownloaded[task.ID] = latest
 								infos.Mutex.Unlock()
 							} else {
-								log.Printf("增量下载失败: cid=%d err=%v", task.ID, err)
+								log.Printf("增量下载失败: cid: %d err: %v", task.ID, err)
 							}
 						}
 					}
@@ -409,11 +409,11 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 		// 如果配置允许强制加入频道，则尝试加入并重试一次
 		forceJoin := infos.Conf.Download.ForceJoin || task.ForceJoin
 		if forceJoin {
-			log.Printf("账号 %s 未加入频道 cid=%d, 尝试强制加入", accountName, task.ID)
+			log.Printf("账号 %s 未加入频道 cid: %d, 尝试强制加入", accountName, task.ID)
 			if jerr := tryJoinChannel(client, task.Join); jerr == nil {
 				latest, err = infos.getLatestMessageID(client, task.ID)
 			} else {
-				log.Printf("尝试加入频道失败: cid=%d join=%s err=%v", task.ID, task.Join, jerr)
+				log.Printf("尝试加入频道失败: cid: %d join: %s err: %v", task.ID, task.Join, jerr)
 				return err
 			}
 		} else {
@@ -429,12 +429,12 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 		start = 1
 	}
 	if start > latest {
-		log.Printf("频道无需下载: cid=%d from=%d latest=%d", task.ID, start, latest)
+		log.Printf("频道无需下载: cid: %d from: %d latest: %d", task.ID, start, latest)
 		return nil
 	}
 
 	typeFilter, allowAll := normalizeTypeFilter(infos.Conf.Download.GlobalTypes, task.Types)
-	log.Printf("频道开始下载: cid=%d from=%d latest=%d user=%s", task.ID, start, latest, accountName)
+	log.Printf("频道开始下载: cid: %d from: %d latest: %d user: %s", task.ID, start, latest, accountName)
 
 	availableAccounts := infos.availableUserAccounts()
 	rrIdx := 0
@@ -502,7 +502,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 
 			ms, err := client.GetMessages(task.ID, &telegram.SearchOption{IDs: ids})
 			if err != nil {
-				log.Printf("批量获取消息失败: cid=%d start=%d end=%d err=%v", task.ID, cursor, end, err)
+				log.Printf("批量获取消息失败: cid: %d start: %d end: %d err: %v", task.ID, cursor, end, err)
 				continue
 			}
 			if len(ms) == 0 {
@@ -561,7 +561,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 
 		if err := fetchNextJobs(); err != nil {
 			if ctx.Err() == nil {
-				log.Printf("初始化下载队列失败: cid=%d err=%v", task.ID, err)
+				log.Printf("初始化下载队列失败: cid: %d err: %v", task.ID, err)
 			}
 			if queuedJobs.Load() == 0 {
 				exhausted.Store(true)
@@ -596,7 +596,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 					continue
 				}
 				if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
-					log.Printf("补充下载队列失败: cid=%d queued=%d err=%v", task.ID, queuedJobs.Load(), err)
+					log.Printf("补充下载队列失败: cid: %d queued: %d err: %v", task.ID, queuedJobs.Load(), err)
 				}
 			}
 		}
@@ -618,7 +618,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 					queuedJobs.Add(-1)
 
 					if job.client == nil {
-						log.Printf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, job.msg.ID, job.account, fmt.Errorf("未找到可用客户端"))
+						log.Printf("下载消息失败: cid: %d mid: %d user: %s err: %v", task.ID, job.msg.ID, job.account, fmt.Errorf("未找到可用客户端"))
 						wgFiles.Done()
 						if exhausted.Load() && queuedJobs.Load() == 0 {
 							closeJobs()
@@ -635,20 +635,20 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 							break
 						}
 						if attempt < maxAttempts {
-							debugf("下载消息失败，准备重试: cid=%d mid=%d user=%s attempt=%d/%d err=%v", task.ID, job.msg.ID, job.account, attempt, maxAttempts, jobErr)
+							debugf("下载消息失败，准备重试: cid: %d mid: %d user: %s attempt: %d/%d err: %v", task.ID, job.msg.ID, job.account, attempt, maxAttempts, jobErr)
 							time.Sleep(time.Duration(attempt) * 2 * time.Second)
 						}
 					}
 					if jobErr != nil {
-						errorf("下载消息失败: cid=%d mid=%d user=%s err=%v", task.ID, job.msg.ID, job.account, jobErr)
+						errorf("下载消息失败: cid: %d mid: %d user: %s err: %v", task.ID, job.msg.ID, job.account, jobErr)
 					} else if result != nil && !result.Handled && infos != nil && infos.Conf != nil && infos.Conf.Download.Rclone.Enabled {
 						remotePath, remoteErr := infos.rcloneRemotePath(outputRoot, result.FinalPath)
 						if remoteErr != nil {
-							errorf("rclone 路径计算失败: cid=%d mid=%d user=%s path=%s err=%v", task.ID, job.msg.ID, job.account, result.FinalPath, remoteErr)
+							errorf("rclone 路径计算失败: cid: %d mid: %d user: %s path: %s err: %v", task.ID, job.msg.ID, job.account, result.FinalPath, remoteErr)
 						} else {
 							mode := infos.rcloneTransferMode()
 							if transferErr := infos.rcloneTransferFile(ctx, result.FinalPath, remotePath, mode); transferErr != nil {
-								errorf("rclone %s 失败(已忽略): cid=%d mid=%d user=%s local=%s remote=%s err=%v", mode, task.ID, job.msg.ID, job.account, result.FinalPath, remotePath, transferErr)
+								errorf("rclone %s 失败(已忽略): cid: %d mid: %d user: %s local: %s remote: %s err: %v", mode, task.ID, job.msg.ID, job.account, result.FinalPath, remotePath, transferErr)
 							} else {
 								log.Printf("rclone %s 完成: %s", mode, result.FinalPath)
 							}
@@ -739,7 +739,7 @@ func (infos *Infos) shouldSkipByFileName(fileName, skipPath string) bool {
 			continue
 		}
 		if strings.Contains(fileNameLower, strings.ToLower(keyword)) {
-			log.Printf("命中过滤规则 跳过: filter=%q path=%s", keyword, skipPath)
+			log.Printf("命中过滤规则 跳过: filter: %q path: %s", keyword, skipPath)
 			return true
 		}
 	}
@@ -785,7 +785,7 @@ func (infos *Infos) logDownloadMemberships(ctx context.Context) {
 		if task.ID == 0 {
 			continue
 		}
-		log.Printf("开始检测频道加入状态: cid=%d", task.ID)
+		log.Printf("开始检测频道加入状态: cid: %d", task.ID)
 
 		var wg sync.WaitGroup
 		for _, accountName := range accountNames {
@@ -795,24 +795,24 @@ func (infos *Infos) logDownloadMemberships(ctx context.Context) {
 
 				client := infos.UserClients[accountName]
 				if client == nil {
-					log.Printf("账号状态: user=%s cid=%d 状态=无客户端", accountName, task.ID)
+					log.Printf("账号状态: user: %s cid: %d 状态: 无客户端", accountName, task.ID)
 					return
 				}
 				latest, err := infos.getLatestMessageID(client, task.ID)
 				if err == nil {
-					log.Printf("账号状态: user=%s cid=%d 状态=已加入 latest=%d", accountName, task.ID, latest)
+					log.Printf("账号状态: user: %s cid: %d 状态: 已加入 latest: %d", accountName, task.ID, latest)
 					return
 				}
-				log.Printf("账号状态: user=%s cid=%d 状态=未加入 err=%v", accountName, task.ID, err)
+				log.Printf("账号状态: user: %s cid: %d 状态: 未加入 err: %v", accountName, task.ID, err)
 				if infos.Conf.Download.ForceJoin || task.ForceJoin {
 					if jerr := tryJoinChannel(client, task.Join); jerr != nil {
-						log.Printf("账号状态: user=%s cid=%d 强制加入失败 join=%s err=%v", accountName, task.ID, task.Join, jerr)
+						log.Printf("账号状态: user: %s cid: %d 强制加入失败 join: %s err: %v", accountName, task.ID, task.Join, jerr)
 						return
 					}
 					if latest, err = infos.getLatestMessageID(client, task.ID); err == nil {
-						log.Printf("账号状态: user=%s cid=%d 强制加入成功 latest=%d", accountName, task.ID, latest)
+						log.Printf("账号状态: user: %s cid: %d 强制加入成功 latest: %d", accountName, task.ID, latest)
 					} else {
-						log.Printf("账号状态: user=%s cid=%d 强制加入后仍不可用 err=%v", accountName, task.ID, err)
+						log.Printf("账号状态: user: %s cid: %d 强制加入后仍不可用 err: %v", accountName, task.ID, err)
 					}
 				}
 			}(accountName, task)
