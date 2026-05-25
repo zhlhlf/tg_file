@@ -64,9 +64,9 @@ func (infos *Infos) createBotsWithFirstUserBot(count int) ([]string, error) {
 		}
 		createdTokens = append(createdTokens, token)
 		infos.appendBotToken(token)
-		log.Printf("已创建 Bot: username=@%s", username)
+		log.Printf("已创建 Bot: username: @%s", username)
 		if i < count-1 {
-			debugf("创建 Bot 后休眠: sleep=1m index=%d", i+1)
+			debugf("创建 Bot 后休眠: sleep: 1m index: %d", i+1)
 			time.Sleep(1 * time.Minute)
 		}
 	}
@@ -74,7 +74,7 @@ func (infos *Infos) createBotsWithFirstUserBot(count int) ([]string, error) {
 	if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
 		return createdTokens, fmt.Errorf("保存 botTokens 失败: %w", err)
 	}
-	debugf("批量创建 Bot 完成: count=%d", len(createdTokens))
+	debugf("批量创建 Bot 完成: count: %d", len(createdTokens))
 	return createdTokens, nil
 }
 
@@ -148,19 +148,19 @@ func (infos *Infos) collectAllBotTokensFromAllUsers() ([]string, error) {
 			allTokens = append(allTokens, token)
 			infos.appendBotToken(token)
 		}
-		log.Printf("UserBot[%s] 获取完成，发现 token=%d", result.name, len(result.tokens))
+		log.Printf("UserBot[%s] 获取完成，发现 token: %d", result.name, len(result.tokens))
 	}
 
 	if len(allTokens) == 0 {
 		return nil, fmt.Errorf("未从任何 UserBot 账号获取到 token")
 	}
-	log.Printf("所有 UserBot 获取完成：成功账号=%d 失败账号=%d 去重后 token 总数=%d", successUsers, failedUsers, len(allTokens))
+	log.Printf("所有 UserBot 获取完成：成功账号: %d 失败账号: %d 去重后 token 总数: %d", successUsers, failedUsers, len(allTokens))
 	return allTokens, nil
 }
 
 func (infos *Infos) collectBotTokensFromSingleUser(name string, client *telegram.Client, peer any, actorID int64, lastSeen *int32) ([]string, error) {
 	if _, err := infos.botFatherSendAndWait(client, peer, actorID, "/cancel", lastSeen, 12*time.Second); err != nil {
-		debugf("BotFather /cancel 失败，继续尝试: user=%s err=%v", name, err)
+		debugf("BotFather /cancel 失败，继续尝试: user: %s err: %v", name, err)
 	}
 
 	resp, err := infos.botFatherSendAndExpect(client, peer, actorID, "/mybots", lastSeen, botFatherStep{
@@ -200,7 +200,7 @@ func (infos *Infos) collectBotTokensFromSingleUser(name string, client *telegram
 		contentRaw := extractMessageContent(reply)
 		if token := botTokenPattern.FindString(contentRaw); token != "" {
 			tokens = append(tokens, token)
-			debugf("获取 BotToken 成功: user=%s bot=%s", name, username)
+			debugf("获取 BotToken 成功: user: %s bot: %s", name, username)
 			continue
 		}
 		return tokens, fmt.Errorf("BotFather 未返回 %s 的有效 token: %q", username, contentRaw)
@@ -239,18 +239,18 @@ func (infos *Infos) collectBotUsernamesFromMyBots(name string, client *telegram.
 			break
 		}
 		if _, err := page.Click(nextData); err != nil {
-			debugf("BotFather 点击下一页失败: user=%s page=%d button=%q err=%v", name, pageIndex+1, nextText, err)
+			debugf("BotFather 点击下一页失败: user: %s page: %d button: %q err: %v", name, pageIndex+1, nextText, err)
 			break
 		}
 		nextPage, err := infos.waitBotFatherEditedMessage(client, peer, actorID, page.ID, pageSignature, 12*time.Second)
 		if err != nil {
-			debugf("BotFather 等待下一页失败: user=%s page=%d button=%q err=%v", name, pageIndex+1, nextText, err)
+			debugf("BotFather 等待下一页失败: user: %s page: %d button: %q err: %v", name, pageIndex+1, nextText, err)
 			break
 		}
 		page = nextPage
 	}
 
-	debugf("BotFather bot 列表收集完成: user=%s pages=%d bots=%d", name, len(visitedPages), len(usernames))
+	debugf("BotFather bot 列表收集完成: user: %s pages: %d bots: %d", name, len(visitedPages), len(usernames))
 	return usernames
 }
 
@@ -437,14 +437,14 @@ func (infos *Infos) createSingleBot(client *telegram.Client, peer any, actorID i
 			}
 		}
 		if strings.Contains(text, "username is already taken") || strings.Contains(text, "sorry, this username is already taken") || strings.Contains(text, "username is invalid") {
-			debugf("BotFather 用户名不可用，重试: username=%s reply=%q", username, text)
+			debugf("BotFather 用户名不可用，重试: username: %s reply: %q", username, text)
 			continue
 		}
 		if strings.Contains(text, "i can help you create and manage telegram bots") {
-			debugf("BotFather 返回帮助页，重新进入 /newbot 流程: username=%s", username)
+			debugf("BotFather 返回帮助页，重新进入 /newbot 流程: username: %s", username)
 			return "", "", fmt.Errorf("BotFather 会话已重置，请重试")
 		}
-		debugf("BotFather 未返回 token，重试用户名: username=%s reply=%q", username, text)
+		debugf("BotFather 未返回 token，重试用户名: username: %s reply: %q", username, text)
 	}
 
 	_, _ = infos.botFatherSendAndWait(client, peer, actorID, "/cancel", lastSeen, 12*time.Second)
@@ -617,11 +617,11 @@ func (infos *Infos) sleepWithRefresh(waitSeconds int) {
 	if waitSeconds <= 0 {
 		return
 	}
-	debugf("BotFather 限流，等待开始: wait=%ds", waitSeconds)
+	debugf("BotFather 限流，等待开始: wait: %ds", waitSeconds)
 	writer := log.Writer()
 	remaining := waitSeconds
 	for remaining > 0 {
-		_, _ = fmt.Fprintf(writer, "\rBotFather 限流等待中: remain=%ds (%s)    ", remaining, handleTime(uint64(remaining)))
+		_, _ = fmt.Fprintf(writer, "\rBotFather 限流等待中: remain: %ds (%s)    ", remaining, handleTime(uint64(remaining)))
 		time.Sleep(1 * time.Second)
 		remaining--
 	}

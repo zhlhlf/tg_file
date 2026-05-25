@@ -126,7 +126,7 @@ func (infos *Infos) getRelayInboxMedia(botID, senderID, minUnix int64, wantedCap
 	infos.Mutex.RUnlock()
 	if !ok {
 		if infos != nil && infos.Conf != nil && infos.Conf.Debug {
-			debugf("RelayInbox 未命中键: botID=%d senderID=%d wantedCaption=%q", botID, senderID, strings.TrimSpace(wantedCaption))
+			debugf("RelayInbox 未命中键: botID: %d senderID: %d wantedCaption: %q", botID, senderID, strings.TrimSpace(wantedCaption))
 		}
 		return telegram.NewMessage{}, false
 	}
@@ -135,13 +135,13 @@ func (infos *Infos) getRelayInboxMedia(botID, senderID, minUnix int64, wantedCap
 		rec := records[idx]
 		if minUnix > 0 && rec.ReceivedAt < minUnix {
 			if infos != nil && infos.Conf != nil && infos.Conf.Debug {
-				debugf("RelayInbox 跳过旧消息: botID=%d senderID=%d mid=%d receivedAt=%d minUnix=%d caption=%q", botID, senderID, rec.Msg.ID, rec.ReceivedAt, minUnix, strings.TrimSpace(rec.Caption))
+				debugf("RelayInbox 跳过旧消息: botID: %d senderID: %d mid: %d receivedAt: %d minUnix: %d caption: %q", botID, senderID, rec.Msg.ID, rec.ReceivedAt, minUnix, strings.TrimSpace(rec.Caption))
 			}
 			continue
 		}
 		if !rec.Msg.IsMedia() || rec.Msg.Media() == nil || rec.Msg.File == nil {
 			if infos != nil && infos.Conf != nil && infos.Conf.Debug {
-				debugf("RelayInbox 跳过无效媒体: botID=%d senderID=%d mid=%d isMedia=%v fileNil=%v mediaType=%T", botID, senderID, rec.Msg.ID, rec.Msg.IsMedia(), rec.Msg.File == nil, rec.Msg.Media())
+				debugf("RelayInbox 跳过无效媒体: botID: %d senderID: %d mid: %d isMedia: %v fileNil: %v mediaType: %T", botID, senderID, rec.Msg.ID, rec.Msg.IsMedia(), rec.Msg.File == nil, rec.Msg.Media())
 			}
 			continue
 		}
@@ -152,7 +152,7 @@ func (infos *Infos) getRelayInboxMedia(botID, senderID, minUnix int64, wantedCap
 			}
 			if recCaption != wantedCaption {
 				if infos != nil && infos.Conf != nil && infos.Conf.Debug {
-					debugf("RelayInbox caption 不匹配: botID=%d senderID=%d mid=%d wanted=%q actual=%q", botID, senderID, rec.Msg.ID, wantedCaption, recCaption)
+					debugf("RelayInbox caption 不匹配: botID: %d senderID: %d mid: %d wanted: %q actual: %q", botID, senderID, rec.Msg.ID, wantedCaption, recCaption)
 				}
 				continue
 			}
@@ -160,7 +160,7 @@ func (infos *Infos) getRelayInboxMedia(botID, senderID, minUnix int64, wantedCap
 		return rec.Msg, true
 	}
 	if infos != nil && infos.Conf != nil && infos.Conf.Debug {
-		debugf("RelayInbox 有缓存但未匹配: botID=%d senderID=%d wantedCaption=%q cached=%d", botID, senderID, wantedCaption, len(records))
+		debugf("RelayInbox 有缓存但未匹配: botID: %d senderID: %d wantedCaption: %q cached: %d", botID, senderID, wantedCaption, len(records))
 	}
 	return telegram.NewMessage{}, false
 }
@@ -220,16 +220,16 @@ func (infos *Infos) ensureRelayBotAlive(ctx context.Context, relayBot *telegram.
 
 	latency, err := relayBot.Ping(pingCtx)
 	if err == nil {
-		debugf("回流 Bot 在线: bot=%s latency=%dms", relayLabel, latency.Milliseconds())
+		debugf("回流 Bot 在线: bot: %s latency: %dms", relayLabel, latency.Milliseconds())
 		return nil
 	}
 
-	log.Printf("回流 Bot Ping 失败，准备重连: bot=%s err=%v", relayLabel, err)
+	log.Printf("回流 Bot Ping 失败，准备重连: bot: %s err: %v", relayLabel, err)
 	if disconnectErr := relayBot.Disconnect(); disconnectErr != nil {
-		log.Printf("回流 Bot 断开旧连接失败: bot=%s err=%v", relayLabel, disconnectErr)
+		log.Printf("回流 Bot 断开旧连接失败: bot: %s err: %v", relayLabel, disconnectErr)
 	}
 	if connectErr := relayBot.Connect(); connectErr != nil {
-		log.Printf("回流 Bot 重连失败: bot=%s err=%v", relayLabel, connectErr)
+		log.Printf("回流 Bot 重连失败: bot: %s err: %v", relayLabel, connectErr)
 		return connectErr
 	}
 
@@ -237,11 +237,11 @@ func (infos *Infos) ensureRelayBotAlive(ctx context.Context, relayBot *telegram.
 	defer recheckCancel()
 	recheckLatency, recheckErr := relayBot.Ping(recheckCtx)
 	if recheckErr != nil {
-		log.Printf("回流 Bot 重连后 Ping 失败: bot=%s err=%v", relayLabel, recheckErr)
+		log.Printf("回流 Bot 重连后 Ping 失败: bot: %s err: %v", relayLabel, recheckErr)
 		return recheckErr
 	}
 
-	log.Printf("回流 Bot 已重连恢复: bot=%s latency=%dms", relayLabel, recheckLatency.Milliseconds())
+	log.Printf("回流 Bot 已重连恢复: bot: %s latency: %dms", relayLabel, recheckLatency.Milliseconds())
 	return nil
 }
 
@@ -255,16 +255,16 @@ func (infos *Infos) ensureUserBotAlive(ctx context.Context, userClient *telegram
 
 	latency, err := userClient.Ping(pingCtx)
 	if err == nil {
-		debugf("UserBot 在线: user=%s latency=%dms", userLabel, latency.Milliseconds())
+		debugf("UserBot 在线: user: %s latency: %dms", userLabel, latency.Milliseconds())
 		return nil
 	}
 
-	log.Printf("UserBot Ping 失败，准备重连: user=%s err=%v", userLabel, err)
+	log.Printf("UserBot Ping 失败，准备重连: user: %s err: %v", userLabel, err)
 	if disconnectErr := userClient.Disconnect(); disconnectErr != nil {
-		log.Printf("UserBot 断开旧连接失败: user=%s err=%v", userLabel, disconnectErr)
+		log.Printf("UserBot 断开旧连接失败: user: %s err: %v", userLabel, disconnectErr)
 	}
 	if connectErr := userClient.Connect(); connectErr != nil {
-		log.Printf("UserBot 重连失败: user=%s err=%v", userLabel, connectErr)
+		log.Printf("UserBot 重连失败: user: %s err: %v", userLabel, connectErr)
 		return connectErr
 	}
 
@@ -272,11 +272,11 @@ func (infos *Infos) ensureUserBotAlive(ctx context.Context, userClient *telegram
 	defer recheckCancel()
 	recheckLatency, recheckErr := userClient.Ping(recheckCtx)
 	if recheckErr != nil {
-		log.Printf("UserBot 重连后 Ping 失败: user=%s err=%v", userLabel, recheckErr)
+		log.Printf("UserBot 重连后 Ping 失败: user: %s err: %v", userLabel, recheckErr)
 		return recheckErr
 	}
 
-	log.Printf("UserBot 已重连恢复: user=%s latency=%dms", userLabel, recheckLatency.Milliseconds())
+	log.Printf("UserBot 已重连恢复: user: %s latency: %dms", userLabel, recheckLatency.Milliseconds())
 	return nil
 }
 
@@ -293,7 +293,7 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 	if sourceMsg.File == nil {
 		refreshedMessages, refreshErr := userClient.GetMessages(sourceMsg.ChatID(), &telegram.SearchOption{IDs: []int32{sourceMsg.ID}})
 		if refreshErr != nil {
-			log.Printf("源消息缺少文件信息，刷新失败，尝试保活 UserBot: cid=%d mid=%d user=%s err=%v", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr)
+			log.Printf("源消息缺少文件信息，刷新失败，尝试保活 UserBot: cid: %d mid: %d user: %s err: %v", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr)
 			if keepAliveErr := infos.ensureUserBotAlive(ctx, userClient, userAccount); keepAliveErr != nil {
 				return nil, fmt.Errorf("刷新源消息失败且 UserBot 保活失败: cid=%d mid=%d user=%s err=%v keepalive=%w", sourceMsg.ChatID(), sourceMsg.ID, userAccount, refreshErr, keepAliveErr)
 			}
@@ -349,7 +349,7 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 	if err != nil {
 		return nil, err
 	}
-	debugf("Send返回媒体状态: bot=%s mid=%d isMedia=%v fileNil=%v mediaType=%T", relayLabel, relaySent.ID, relaySent.IsMedia(), relaySent.File == nil, relaySent.Media())
+	debugf("Send返回媒体状态: bot: %s mid: %d isMedia: %v fileNil: %v mediaType: %T", relayLabel, relaySent.ID, relaySent.IsMedia(), relaySent.File == nil, relaySent.Media())
 
 	senderID := int64(0)
 	mappedID := int64(0)
@@ -380,10 +380,10 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 	if err := infos.ensureRelayBotAlive(ctx, relayBot, relayLabel); err != nil {
 		return nil, fmt.Errorf("回流等待前 Bot 不在线: bot=%s err=%w", relayLabel, err)
 	}
-	debugf("Bot 开始等待回流媒体: bot=%s user=%s senderID=%d mappedID=%d botID=%d mid=%d caption=%s", relayLabel, userAccount, senderID, mappedID, relayBotID, relaySent.ID, captionKey)
+	debugf("Bot 开始等待回流媒体: bot: %s user: %s senderID: %d mappedID: %d botID: %d mid: %d caption: %s", relayLabel, userAccount, senderID, mappedID, relayBotID, relaySent.ID, captionKey)
 	for i := 1; i <= 6; i++ {
 		if cachedMsg, ok := infos.getRelayInboxMedia(relayBotID, senderID, 0, captionKey); ok {
-			debugf("Bot 命中回流媒体: bot=%s senderID=%d cachedMid=%d attempt=%d caption=%s", relayLabel, senderID, cachedMsg.ID, i, captionKey)
+			debugf("Bot 命中回流媒体: bot: %s senderID: %d cachedMid: %d attempt: %d caption: %s", relayLabel, senderID, cachedMsg.ID, i, captionKey)
 			cachedMsg.Client = relayBot
 			return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, cachedMsg, userAccount+"->"+relayLabel, cache)
 		}

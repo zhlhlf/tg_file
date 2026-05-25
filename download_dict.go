@@ -61,9 +61,9 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 
 	if infos != nil && infos.Conf != nil && infos.Conf.Download.Rclone.Enabled {
 		if remotePath, remoteErr := infos.rcloneRemotePath(outputRoot, targetInfo.FinalPath); remoteErr == nil {
-			debugf("检查远端文件是否存在: path=%s remote=%s", displayLocalPath(targetInfo.FinalPath), remotePath)
+			debugf("检查远端文件是否存在: path: %s remote: %s", displayLocalPath(targetInfo.FinalPath), remotePath)
 		} else {
-			debugf("检查文件是否存在: path=%s", displayLocalPath(targetInfo.FinalPath))
+			debugf("检查文件是否存在: path: %s", displayLocalPath(targetInfo.FinalPath))
 		}
 	}
 	if handled, err := infos.ensureExistingMediaTarget(ctx, outputRoot, targetInfo.FinalPath); err != nil {
@@ -82,7 +82,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 		tmpFileName = fmt.Sprintf("%d_%d - %s%s.tmp", sourceMsg.ChatID(), sourceMsg.ID, targetInfo.Content, targetInfo.Ext)
 	}
 	tmpPath := filepath.Join(tmpDir, tmpFileName)
-	log.Printf("下载文件: user=%s final=%s", accountName, displayLocalPath(targetInfo.FinalPath))
+	log.Printf("下载文件: user: %s final: %s", accountName, displayLocalPath(targetInfo.FinalPath))
 	success := false
 	defer func() {
 		if !success {
@@ -130,7 +130,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 			return
 		}
 		lastProgressAt = now
-		debugf("下载进度: bot=%s cap=%q progress=%.2f%% speed=%s eta=%s", botLabel, botCaption, info.Percentage, speedText, info.ETAString())
+		debugf("下载进度: bot: %s cap: %q progress: %.2f%% speed: %s eta: %s", botLabel, botCaption, info.Percentage, speedText, info.ETAString())
 	}
 	watchdogDone := make(chan struct{})
 	go func() {
@@ -156,7 +156,7 @@ func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *tel
 					continue
 				}
 				if noSizeChangeAbort.CompareAndSwap(false, true) {
-					warnf("下载停滞，20秒内文件大小无变化，取消本次下载: bot=%s cap=%q size=%d sourceCid=%d sourceMid=%d downloadCid=%d downloadMid=%d", botLabel, botCaption, currentSize, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
+					warnf("下载停滞，20秒内文件大小无变化，取消本次下载: bot: %s cap: %q size: %d sourceCid: %d sourceMid: %d downloadCid: %d downloadMid: %d", botLabel, botCaption, currentSize, sourceMsg.ChatID(), sourceMsg.ID, downloadMsg.ChatID(), downloadMsg.ID)
 					cancel()
 				}
 				return

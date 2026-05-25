@@ -351,7 +351,7 @@ func (infos *Infos) loadSessionsDirClients() map[string]*telegram.Client {
 			infos.UserClient = client
 		}
 		infos.Mutex.Unlock()
-		log.Printf("从 sessions 加载 UserBot: %s uid=%d", base, me.ID)
+		log.Printf("从 sessions 加载 UserBot: %s uid: %d", base, me.ID)
 		loaded[tag] = client
 	}
 	return loaded
@@ -934,7 +934,7 @@ func botConf(cate string) (conf telegram.ClientConfig) {
 					}
 				}
 			}
-			debugf("访问太过频繁: client=%s wait=%d err=%v", cate, wait+1, err)
+			debugf("访问太过频繁: client: %s wait: %d err: %v", cate, wait+1, err)
 			waitUntil := time.Now().Add(time.Duration(wait+1) * time.Second)
 			infos.WaitUntil.Store(waitUntil.Unix())
 			time.Sleep(time.Duration(wait+1) * time.Second)

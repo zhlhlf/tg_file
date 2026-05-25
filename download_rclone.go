@@ -67,7 +67,7 @@ func (infos *Infos) rcloneFileExists(ctx context.Context, outputRoot, finalPath 
 			}
 			continue
 		}
-		debugf("rclone目录缓存检查失败，回退单文件检查: dir=%s file=%s err=%v", remoteDir, remoteName, err)
+		debugf("rclone目录缓存检查失败，回退单文件检查: dir: %s file: %s err: %v", remoteDir, remoteName, err)
 
 		args := infos.rcloneArgs("lsjson", "--stat", remotePath)
 		cmd := exec.CommandContext(ctx, "rclone", args...)
@@ -193,7 +193,7 @@ func (infos *Infos) rcloneMoveFile(ctx context.Context, localPath, remotePath st
 }
 
 func (infos *Infos) rcloneTransferFile(ctx context.Context, localPath, remotePath, mode string) error {
-	debugf("rclone传输: mode=%s local=%s remote=%s", strings.ToLower(strings.TrimSpace(mode)), localPath, remotePath)
+	debugf("rclone传输: mode: %s local: %s remote: %s", strings.ToLower(strings.TrimSpace(mode)), localPath, remotePath)
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "copy":
 		return infos.rcloneCopyFile(ctx, localPath, remotePath)
@@ -282,7 +282,7 @@ func rcloneNameMatchesMessageID(targetName string, files map[string]struct{}) bo
 	for name := range files {
 		candidateID := rcloneMessageID(name)
 		if candidateID == msgID {
-			debugf("rclone模糊匹配命中: target=%s exists=%s", targetName, name)
+			debugf("rclone模糊匹配命中: target: %s exists: %s", targetName, name)
 			return true
 		}
 	}

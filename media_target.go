@@ -105,11 +105,11 @@ func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegr
 	captionFromCache := false
 	if strings.TrimSpace(rawText) == "" {
 		if groupCaption, fromCache, err := infos.getMediaGroupCaption(ctx, sourceClient, sourceMsg, cache); err != nil {
-			debugf("消息组 caption 获取失败: cid=%d mid=%d err=%v", sourceMsg.ChatID(), sourceMsg.ID, err)
+			debugf("消息组 caption 获取失败: cid: %d mid: %d err: %v", sourceMsg.ChatID(), sourceMsg.ID, err)
 		} else if strings.TrimSpace(groupCaption) != "" {
 			rawText = groupCaption
 			captionFromCache = fromCache
-			debugf("消息组 caption 命中: cid=%d mid=%d fromCache=%t caption=%q", sourceMsg.ChatID(), sourceMsg.ID, captionFromCache, rawText)
+			debugf("消息组 caption 命中: cid: %d mid: %d fromCache: %t caption: %q", sourceMsg.ChatID(), sourceMsg.ID, captionFromCache, rawText)
 		}
 	}
 
@@ -124,7 +124,7 @@ func (infos *Infos) resolveMediaTarget(ctx context.Context, sourceClient *telegr
 	if maxLen := infos.captionMaxLength(); maxLen > 0 {
 		truncated := truncateRunes(content, maxLen)
 		if truncated != content {
-			debugf("caption 超长，已截断: cid=%d mid=%d max=%d", sourceMsg.ChatID(), sourceMsg.ID, maxLen)
+			debugf("caption 超长，已截断: cid: %d mid: %d max: %d", sourceMsg.ChatID(), sourceMsg.ID, maxLen)
 			content = truncated
 		}
 	}
@@ -295,7 +295,7 @@ func (infos *Infos) ensureExistingMediaTarget(ctx context.Context, outputRoot, f
 	}
 
 	if remoteExists {
-		log.Printf("rclone远程存在，跳过 match=%s path=%s", remoteMatchMode, finalPath)
+		log.Printf("rclone远程存在，跳过 match: %s path: %s", remoteMatchMode, finalPath)
 		return true, nil
 	}
 
@@ -306,14 +306,14 @@ func (infos *Infos) ensureExistingMediaTarget(ctx context.Context, outputRoot, f
 				return true, rcloneErr
 			}
 			mode := infos.rcloneTransferMode()
-			log.Printf("本地存在，执行 rclone %s path=%s", mode, finalPath)
+			log.Printf("本地存在，执行 rclone %s path: %s", mode, finalPath)
 			if rcloneErr := infos.rcloneTransferFile(ctx, finalPath, remotePath, mode); rcloneErr != nil {
 				return true, rcloneErr
 			}
 			log.Printf("rclone %s 完成: %s", mode, finalPath)
 			return true, nil
 		}
-		log.Printf("本地存在，跳过 path=%s", finalPath)
+		log.Printf("本地存在，跳过 path: %s", finalPath)
 		return true, nil
 	}
 

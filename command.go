@@ -18,7 +18,7 @@ func handleRelayInboxCapture(m *telegram.NewMessage) error {
 	}
 	if !m.IsMedia() || m.Media() == nil || m.File == nil {
 		if m != nil && infos != nil && infos.Conf != nil && infos.Conf.Debug {
-			debugf("RelayInbox 忽略非媒体消息: client=%p mid=%d senderID=%d chatID=%d isMedia=%v fileNil=%v mediaType=%T", m.Client, m.ID, m.SenderID(), m.ChatID(), m.IsMedia(), m.File == nil, m.Media())
+			debugf("RelayInbox 忽略非媒体消息: client: %p mid: %d senderID: %d chatID: %d isMedia: %v fileNil: %v mediaType: %T", m.Client, m.ID, m.SenderID(), m.ChatID(), m.IsMedia(), m.File == nil, m.Media())
 		}
 		return nil
 	}
@@ -39,7 +39,7 @@ func handleRelayInboxCapture(m *telegram.NewMessage) error {
 	if botID == 0 {
 		if infos != nil && infos.Conf != nil && infos.Conf.Debug {
 			caption := strings.TrimSpace(extractMessageContent(*m))
-			debugf("RelayInbox 未识别到 Bot 实例: client=%p mid=%d senderID=%d chatID=%d caption=%q", m.Client, m.ID, senderID, m.ChatID(), caption)
+			debugf("RelayInbox 未识别到 Bot 实例: client: %p mid: %d senderID: %d chatID: %d caption: %q", m.Client, m.ID, senderID, m.ChatID(), caption)
 		}
 		return nil
 	}
@@ -419,7 +419,7 @@ func sendMS(m *telegram.NewMessage, src any, params *telegram.SendOptions, wait 
 	case infos.BotClient != nil:
 		targetID := infos.notificationTargetID()
 		if targetID == 0 {
-			log.Printf("跳过主动发送消息: 无可用通知目标, message=%v", src)
+			log.Printf("跳过主动发送消息: 无可用通知目标, message: %v", src)
 			return
 		}
 		ms, err := infos.BotClient.SendMessage(targetID, src, params)
