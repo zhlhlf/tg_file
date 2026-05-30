@@ -172,6 +172,9 @@ download:
     - photo
   skipNameContains:
     - "广告"
+  requireNameContains:
+    - "关键词"
+  maxSize: 0
   concurrent: 2
   fileWorkers: 4
   batchSize: 100
@@ -179,11 +182,17 @@ download:
   channels:
     - join: "https://t.me/channelname"
       fromMessageID: 1
+      requireNameContains:
+        - "关键词A"
+      maxSize: 1GB
       types:
         - video
     - id: -1001234567890
       fromMessageID: 1
       user: user1
+      requireNameContains:
+        - "关键词B"
+      maxSize: 500MB
       types:
         - video
         - photo
@@ -198,6 +207,8 @@ download:
 - `download.scanInterval`：增量扫描间隔，单位秒；小于等于 0 时当前代码默认使用 `300`
 - `download.globalTypes`：全局媒体类型过滤
 - `download.skipNameContains`：文件名包含指定关键词时跳过下载
+- `download.requireNameContains`：不为空时，文件名必须包含任一关键词才下载
+- `download.maxSize`：全局文件大小上限，`0` 或不配置表示不限制；支持纯字节数或 `KB` / `MB` / `GB` / `TB`
 - `download.concurrent`：同时执行的文件下载任务数，默认 `3`
 - `download.fileWorkers`：单个文件内部下载线程数；小于等于 0 时使用 `workers`
 - `download.batchSize`：每次批量拉取消息数量，默认 `100`
@@ -211,6 +222,8 @@ download:
 - `fromMessageID`：从哪条消息开始下载
 - `user`：指定使用某个 UserBot；为空时自动选择
 - `types`：该频道自己的媒体类型过滤，会覆盖 `globalTypes`
+- `requireNameContains`：该频道自己的文件名必含过滤；不为空时覆盖 `download.requireNameContains`
+- `maxSize`：该频道文件大小上限；大于 `0` 时覆盖 `download.maxSize`
 - `forceJoin`：该频道是否允许自动加入
 
 ## rclone 远端转存

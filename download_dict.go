@@ -31,19 +31,19 @@ func (infos *Infos) getLatestMessageID(client *telegram.Client, cid int64) (int3
 	return ms[0].ID, nil
 }
 
-func (infos *Infos) downloadMessage(ctx context.Context, sourceClient *telegram.Client, downloadClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, downloadMsg telegram.NewMessage, accountName string, relayCounter *uint64, cache *mediaResolveCache) (*downloadResult, error) {
+func (infos *Infos) downloadMessage(ctx context.Context, sourceClient *telegram.Client, downloadClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, downloadMsg telegram.NewMessage, accountName string, relayCounter *uint64, cache *mediaResolveCache, task DownloadChannel) (*downloadResult, error) {
 	if len(infos.RelayBotClients) > 0 && relayCounter != nil {
-		return infos.downloadMessageViaRelay(ctx, sourceClient, outputRoot, sourceMsg, accountName, relayCounter, cache)
+		return infos.downloadMessageViaRelay(ctx, sourceClient, outputRoot, sourceMsg, accountName, relayCounter, cache, task)
 	}
-	return infos.downloadMessageToFile(ctx, sourceClient, downloadClient, outputRoot, sourceMsg, downloadMsg, accountName, cache)
+	return infos.downloadMessageToFile(ctx, sourceClient, downloadClient, outputRoot, sourceMsg, downloadMsg, accountName, cache, task)
 }
 
-func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *telegram.Client, downloadClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, downloadMsg telegram.NewMessage, accountName string, cache *mediaResolveCache) (*downloadResult, error) {
+func (infos *Infos) downloadMessageToFile(ctx context.Context, sourceClient *telegram.Client, downloadClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, downloadMsg telegram.NewMessage, accountName string, cache *mediaResolveCache, task DownloadChannel) (*downloadResult, error) {
 	targetInfo, err := infos.resolveMediaTarget(ctx, sourceClient, outputRoot, sourceMsg, cache)
 	if err != nil {
 		return nil, err
 	}
-	if infos.shouldSkipByFileName(targetInfo.FileName, targetInfo.FinalPath) {
+	if infos.shouldSkipByFileName(targetInfo.FileName, targetInfo.FinalPath, task) {
 		return &downloadResult{FinalPath: targetInfo.FinalPath, Handled: true}, nil
 	}
 	displayLocalPath := func(path string) string {

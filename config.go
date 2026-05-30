@@ -36,18 +36,65 @@ type UserBot struct {
 }
 
 type Download struct {
-	Enabled          bool              `yaml:"enabled"`
-	OutputDir        string            `yaml:"outputDir,omitempty"`
-	MaxCaptionLength int               `yaml:"max_caption_length,omitempty"` // 文件名中 caption 的最大长度，默认 90；小于等于 0 时也使用 90
-	GlobalTypes      []string          `yaml:"globalTypes,omitempty"`
-	SkipNameContains []string          `yaml:"skipNameContains,omitempty"` // 最终文件名包含任一字符串时跳过下载
-	Channels         []DownloadChannel `yaml:"channels,omitempty"`
-	Concurrent       int               `yaml:"concurrent,omitempty"`   // 同时并发下载的频道数量限制, 0 表示不限制
-	FileWorkers      int               `yaml:"fileWorkers,omitempty"`  // 每个文件内部的并发分片数, 0 表示使用全局 workers
-	BatchSize        int               `yaml:"batchSize,omitempty"`    // 每次批量获取消息的大小，默认 100
-	ScanInterval     int               `yaml:"scanInterval,omitempty"` // 定时扫描间隔(秒), 0 表示不配置（代码默认 300s）
-	ForceJoin        bool              `yaml:"forceJoin,omitempty"`    // 当账号未加入频道时尝试自动加入 (全局开关)
-	Rclone           Rclone            `yaml:"rclone,omitempty"`       // rclone 远端存在性检查配置
+	Enabled             bool              `yaml:"enabled"`
+	OutputDir           string            `yaml:"outputDir,omitempty"`
+	MaxCaptionLength    int               `yaml:"max_caption_length,omitempty"` // 文件名中 caption 的最大长度，默认 90；小于等于 0 时也使用 90
+	GlobalTypes         []string          `yaml:"globalTypes,omitempty"`
+	SkipNameContains    []string          `yaml:"skipNameContains,omitempty"`    // 最终文件名包含任一字符串时跳过下载
+	RequireNameContains []string          `yaml:"requireNameContains,omitempty"` // 最终文件名必须包含任一字符串才下载
+	MaxSize             int64             `yaml:"maxSize,omitempty"`             // 全局文件大小上限, 0 表示不限制
+	Channels            []DownloadChannel `yaml:"channels,omitempty"`
+	Concurrent          int               `yaml:"concurrent,omitempty"`   // 同时并发下载的频道数量限制, 0 表示不限制
+	FileWorkers         int               `yaml:"fileWorkers,omitempty"`  // 每个文件内部的并发分片数, 0 表示使用全局 workers
+	BatchSize           int               `yaml:"batchSize,omitempty"`    // 每次批量获取消息的大小，默认 100
+	ScanInterval        int               `yaml:"scanInterval,omitempty"` // 定时扫描间隔(秒), 0 表示不配置（代码默认 300s）
+	ForceJoin           bool              `yaml:"forceJoin,omitempty"`    // 当账号未加入频道时尝试自动加入 (全局开关)
+	Rclone              Rclone            `yaml:"rclone,omitempty"`       // rclone 远端存在性检查配置
+}
+
+type downloadRaw struct {
+	Enabled             bool              `yaml:"enabled"`
+	OutputDir           string            `yaml:"outputDir,omitempty"`
+	MaxCaptionLength    int               `yaml:"max_caption_length,omitempty"`
+	GlobalTypes         []string          `yaml:"globalTypes,omitempty"`
+	SkipNameContains    []string          `yaml:"skipNameContains,omitempty"`
+	RequireNameContains []string          `yaml:"requireNameContains,omitempty"`
+	MaxSize             any               `yaml:"maxSize,omitempty"`
+	Channels            []DownloadChannel `yaml:"channels,omitempty"`
+	Concurrent          int               `yaml:"concurrent,omitempty"`
+	FileWorkers         int               `yaml:"fileWorkers,omitempty"`
+	BatchSize           int               `yaml:"batchSize,omitempty"`
+	ScanInterval        int               `yaml:"scanInterval,omitempty"`
+	ForceJoin           bool              `yaml:"forceJoin,omitempty"`
+	Rclone              Rclone            `yaml:"rclone,omitempty"`
+}
+
+func (conf *Download) UnmarshalYAML(value *yaml.Node) error {
+	var raw downloadRaw
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	maxSize, err := parseSizeField(raw.MaxSize, "download.maxSize")
+	if err != nil {
+		return err
+	}
+	*conf = Download{
+		Enabled:             raw.Enabled,
+		OutputDir:           raw.OutputDir,
+		MaxCaptionLength:    raw.MaxCaptionLength,
+		GlobalTypes:         raw.GlobalTypes,
+		SkipNameContains:    raw.SkipNameContains,
+		RequireNameContains: raw.RequireNameContains,
+		MaxSize:             maxSize,
+		Channels:            raw.Channels,
+		Concurrent:          raw.Concurrent,
+		FileWorkers:         raw.FileWorkers,
+		BatchSize:           raw.BatchSize,
+		ScanInterval:        raw.ScanInterval,
+		ForceJoin:           raw.ForceJoin,
+		Rclone:              raw.Rclone,
+	}
+	return nil
 }
 
 type Rclone struct {
@@ -89,12 +136,14 @@ func (conf *Rclone) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type DownloadChannel struct {
-	ID            int64    `yaml:"id"`
-	FromMessageID int32    `yaml:"fromMessageID"`
-	User          string   `yaml:"user,omitempty"`
-	Join          string   `yaml:"join,omitempty"`
-	Types         []string `yaml:"types,omitempty"`
-	ForceJoin     bool     `yaml:"forceJoin,omitempty"`
+	ID                  int64    `yaml:"id"`
+	FromMessageID       int32    `yaml:"fromMessageID"`
+	User                string   `yaml:"user,omitempty"`
+	Join                string   `yaml:"join,omitempty"`
+	Types               []string `yaml:"types,omitempty"`
+	RequireNameContains []string `yaml:"requireNameContains,omitempty"`
+	MaxSize             int64    `yaml:"maxSize,omitempty"`
+	ForceJoin           bool     `yaml:"forceJoin,omitempty"`
 }
 
 type confRaw struct {
@@ -232,11 +281,14 @@ func parseStringListNode(node yaml.Node, field string) ([]string, error) {
 }
 
 type downloadChannelRaw struct {
-	ID            any      `yaml:"id"`
-	FromMessageID any      `yaml:"fromMessageID"`
-	User          string   `yaml:"user,omitempty"`
-	Join          string   `yaml:"join,omitempty"`
-	Types         []string `yaml:"types,omitempty"`
+	ID                  any      `yaml:"id"`
+	FromMessageID       any      `yaml:"fromMessageID"`
+	User                string   `yaml:"user,omitempty"`
+	Join                string   `yaml:"join,omitempty"`
+	Types               []string `yaml:"types,omitempty"`
+	RequireNameContains []string `yaml:"requireNameContains,omitempty"`
+	MaxSize             any      `yaml:"maxSize,omitempty"`
+	ForceJoin           bool     `yaml:"forceJoin,omitempty"`
 }
 
 func (ch *DownloadChannel) UnmarshalYAML(value *yaml.Node) error {
@@ -253,12 +305,19 @@ func (ch *DownloadChannel) UnmarshalYAML(value *yaml.Node) error {
 	if err != nil {
 		return err
 	}
+	maxSize, err := parseSizeField(raw.MaxSize, "download.channels.maxSize")
+	if err != nil {
+		return err
+	}
 
 	ch.ID = id
 	ch.FromMessageID = fromID
 	ch.User = strings.TrimSpace(raw.User)
 	ch.Join = strings.TrimSpace(raw.Join)
 	ch.Types = raw.Types
+	ch.RequireNameContains = raw.RequireNameContains
+	ch.MaxSize = maxSize
+	ch.ForceJoin = raw.ForceJoin
 	return nil
 }
 
@@ -299,6 +358,68 @@ func (conf *Conf) EffectiveUserBots() []UserBot {
 
 func (conf *Conf) EffectiveDownloadUserBots() []UserBot {
 	return conf.EffectiveUserBots()
+}
+
+func parseSizeField(v any, field string) (int64, error) {
+	if v == nil {
+		return 0, nil
+	}
+	switch value := v.(type) {
+	case string:
+		return parseSizeString(value, field)
+	default:
+		parsed, err := parseInt64Any(v, field)
+		if err != nil {
+			return 0, err
+		}
+		if parsed < 0 {
+			return 0, fmt.Errorf("字段 %s 不能为负数", field)
+		}
+		return parsed, nil
+	}
+}
+
+func parseSizeString(src, field string) (int64, error) {
+	src = strings.TrimSpace(src)
+	if src == "" {
+		return 0, nil
+	}
+	lower := strings.ToLower(strings.ReplaceAll(src, " ", ""))
+	units := []struct {
+		suffix string
+		value  float64
+	}{
+		{"tib", 1024 * 1024 * 1024 * 1024},
+		{"tb", 1024 * 1024 * 1024 * 1024},
+		{"gib", 1024 * 1024 * 1024},
+		{"gb", 1024 * 1024 * 1024},
+		{"mib", 1024 * 1024},
+		{"mb", 1024 * 1024},
+		{"kib", 1024},
+		{"kb", 1024},
+		{"b", 1},
+	}
+	multiplier := float64(1)
+	number := lower
+	for _, unit := range units {
+		if strings.HasSuffix(lower, unit.suffix) {
+			multiplier = unit.value
+			number = strings.TrimSuffix(lower, unit.suffix)
+			break
+		}
+	}
+	parsed, err := strconv.ParseFloat(number, 64)
+	if err != nil {
+		return 0, fmt.Errorf("字段 %s 值 %q 不是有效文件大小", field, src)
+	}
+	if parsed < 0 {
+		return 0, fmt.Errorf("字段 %s 不能为负数", field)
+	}
+	size := parsed * multiplier
+	if size > float64(int64(^uint64(0)>>1)) {
+		return 0, fmt.Errorf("字段 %s 值 %q 超出范围", field, src)
+	}
+	return int64(size), nil
 }
 
 func parseIntField(v any, field string) (int, error) {

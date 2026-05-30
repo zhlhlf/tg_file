@@ -280,7 +280,7 @@ func (infos *Infos) ensureUserBotAlive(ctx context.Context, userClient *telegram
 	return nil
 }
 
-func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, userAccount string, counter *uint64, cache *mediaResolveCache) (*downloadResult, error) {
+func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *telegram.Client, outputRoot string, sourceMsg telegram.NewMessage, userAccount string, counter *uint64, cache *mediaResolveCache, task DownloadChannel) (*downloadResult, error) {
 	relayBot, relayLabel, relayBotID, relayTarget, err := infos.pickRelayBot(counter)
 	if err != nil {
 		return nil, err
@@ -315,7 +315,7 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 	if err != nil {
 		return nil, err
 	}
-	if infos.shouldSkipByFileName(targetInfo.FileName, targetInfo.FinalPath) {
+	if infos.shouldSkipByFileName(targetInfo.FileName, targetInfo.FinalPath, task) {
 		return &downloadResult{FinalPath: targetInfo.FinalPath, Handled: true}, nil
 	}
 	if handled, err := infos.ensureExistingMediaTarget(ctx, outputRoot, targetInfo.FinalPath); err != nil {
@@ -385,7 +385,7 @@ func (infos *Infos) downloadMessageViaRelay(ctx context.Context, userClient *tel
 		if cachedMsg, ok := infos.getRelayInboxMedia(relayBotID, senderID, 0, captionKey); ok {
 			debugf("Bot 命中回流媒体: bot: %s senderID: %d cachedMid: %d attempt: %d caption: %s", relayLabel, senderID, cachedMsg.ID, i, captionKey)
 			cachedMsg.Client = relayBot
-			return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, cachedMsg, userAccount+"->"+relayLabel, cache)
+			return infos.downloadMessageToFile(ctx, userClient, relayBot, outputRoot, refreshedMsg, cachedMsg, userAccount+"->"+relayLabel, cache, task)
 		}
 		if i == 3 || i == 6 {
 			if err := infos.ensureRelayBotAlive(ctx, relayBot, relayLabel); err != nil {

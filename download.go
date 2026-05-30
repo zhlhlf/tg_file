@@ -455,6 +455,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 		client  *telegram.Client
 		account string
 		cache   *mediaResolveCache
+		task    DownloadChannel
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -527,12 +528,15 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 						continue
 					}
 				}
+				if infos.shouldSkipByFileSize(task, msg) {
+					continue
+				}
 
 				fileAccount, fileClient := infos.selectFileDownloadClient(task, accountName, client, availableAccounts, &rrIdx)
 				wgFiles.Add(1)
 				queuedJobs.Add(1)
 
-				job := downloadJob{msg: msg, client: fileClient, account: fileAccount, cache: messageCache}
+				job := downloadJob{msg: msg, client: fileClient, account: fileAccount, cache: messageCache, task: task}
 				select {
 				case <-ctx.Done():
 					queuedJobs.Add(-1)
@@ -630,7 +634,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 					var result *downloadResult
 					const maxAttempts = 3
 					for attempt := 1; attempt <= maxAttempts; attempt++ {
-						result, jobErr = infos.downloadMessage(ctx, job.client, job.client, outputRoot, job.msg, job.msg, job.account, &relayIdx, job.cache)
+						result, jobErr = infos.downloadMessage(ctx, job.client, job.client, outputRoot, job.msg, job.msg, job.account, &relayIdx, job.cache, job.task)
 						if jobErr == nil {
 							break
 						}
@@ -728,11 +732,32 @@ func (infos *Infos) selectFileDownloadClient(task DownloadChannel, accountName s
 	return infos.clientNameForTask(task)
 }
 
-func (infos *Infos) shouldSkipByFileName(fileName, skipPath string) bool {
+func (infos *Infos) shouldSkipByFileName(fileName, skipPath string, task DownloadChannel) bool {
 	if infos == nil || infos.Conf == nil {
 		return false
 	}
 	fileNameLower := strings.ToLower(fileName)
+	requireNameContains := infos.Conf.Download.RequireNameContains
+	if len(task.RequireNameContains) > 0 {
+		requireNameContains = task.RequireNameContains
+	}
+	if len(requireNameContains) > 0 {
+		matched := false
+		for _, rawKeyword := range requireNameContains {
+			keyword := strings.TrimSpace(rawKeyword)
+			if keyword == "" {
+				continue
+			}
+			if strings.Contains(fileNameLower, strings.ToLower(keyword)) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			log.Printf("未命中必含过滤规则 跳过: path: %s", skipPath)
+			return true
+		}
+	}
 	for _, rawKeyword := range infos.Conf.Download.SkipNameContains {
 		keyword := strings.TrimSpace(rawKeyword)
 		if keyword == "" {
@@ -748,6 +773,35 @@ func (infos *Infos) shouldSkipByFileName(fileName, skipPath string) bool {
 
 // 复用“已存在”检测：同时检查本地文件与远端 rclone 是否存在。
 // 返回值: localExists, remoteExists, remoteMatchMode, err(仅 rclone 检查错误)
+func (infos *Infos) shouldSkipByFileSize(task DownloadChannel, msg telegram.NewMessage) bool {
+	if infos == nil || infos.Conf == nil || msg.File == nil {
+		return false
+	}
+	maxSize := infos.Conf.Download.MaxSize
+	if task.MaxSize > 0 {
+		maxSize = task.MaxSize
+	}
+	if maxSize <= 0 || msg.File.Size <= 0 || msg.File.Size <= maxSize {
+		return false
+	}
+	log.Printf("命中文件大小过滤规则 跳过: cid: %d mid: %d size: %s maxSize: %s", task.ID, msg.ID, formatByteSize(msg.File.Size), formatByteSize(maxSize))
+	return true
+}
+
+func formatByteSize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%dB", size)
+	}
+	value := float64(size)
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	idx := 0
+	for value >= 1024 && idx < len(units)-1 {
+		value /= 1024
+		idx++
+	}
+	return fmt.Sprintf("%.2f%s", value, units[idx])
+}
+
 func (infos *Infos) checkExistingLocalOrRemote(ctx context.Context, outputRoot, finalPath string) (bool, bool, string, error) {
 	localExists := false
 	if _, statErr := os.Stat(finalPath); statErr == nil {
