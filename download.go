@@ -449,6 +449,10 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	if workerCount <= 0 {
 		workerCount = 1
 	}
+	batchDelaySec := 0
+	if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchDelay > 0 {
+		batchDelaySec = infos.Conf.Download.BatchDelay
+	}
 
 	type downloadJob struct {
 		msg     telegram.NewMessage
@@ -501,6 +505,15 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				ids = append(ids, mid)
 			}
 
+			if batchDelaySec > 0 {
+				debugf("批量拉取消息前休眠: cid: %d start: %d end: %d queued: %d sleep: %ds", task.ID, cursor, end, queuedJobs.Load(), batchDelaySec)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Duration(batchDelaySec) * time.Second):
+				}
+			}
+			debugf("开始批量拉取消息: cid: %d start: %d end: %d queued: %d", task.ID, cursor, end, queuedJobs.Load())
 			ms, err := client.GetMessages(task.ID, &telegram.SearchOption{IDs: ids})
 			if err != nil {
 				log.Printf("批量获取消息失败: cid: %d start: %d end: %d err: %v", task.ID, cursor, end, err)
@@ -574,10 +587,6 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 			return
 		}
 
-		batchDelaySec := 0
-		if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchDelay > 0 {
-			batchDelaySec = infos.Conf.Download.BatchDelay
-		}
 		ticker := time.NewTicker(4 * time.Second)
 		defer ticker.Stop()
 
@@ -604,15 +613,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				if queued >= refillThreshold {
 					continue
 				}
-				if batchDelaySec > 0 {
-					debugf("下载队列补充前休眠: cid: %d queued: %d threshold: %d sleep: %ds", task.ID, queued, refillThreshold, batchDelaySec)
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(time.Duration(batchDelaySec) * time.Second):
-					}
-				}
-				debugf("开始补充下载队列: cid: %d queued: %d threshold: %d", task.ID, queuedJobs.Load(), refillThreshold)
+				debugf("下载队列低于阈值，准备补充: cid: %d queued: %d threshold: %d", task.ID, queued, refillThreshold)
 				if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
 					log.Printf("补充下载队列失败: cid: %d queued: %d err: %v", task.ID, queuedJobs.Load(), err)
 				}
