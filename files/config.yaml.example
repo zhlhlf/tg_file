@@ -40,7 +40,7 @@ download:
   fileWorkers: 4
   # 每次批量获取消息的大小，默认 100，可根据需要调整
   batchSize: 100
-  # 下载队列低于阈值并准备补充下一批消息前的等待时间(秒)，默认 0
+  # 下载队列生产者每轮循环的等待时间(秒)，默认 4
   batchDelay: 5
   rclone:
     enabled: false

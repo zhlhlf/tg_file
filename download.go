@@ -449,7 +449,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	if workerCount <= 0 {
 		workerCount = 1
 	}
-	batchDelaySec := 0
+	batchDelaySec := 4
 	if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchDelay > 0 {
 		batchDelaySec = infos.Conf.Download.BatchDelay
 	}
@@ -505,14 +505,6 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				ids = append(ids, mid)
 			}
 
-			if batchDelaySec > 0 {
-				debugf("批量拉取消息前休眠: cid: %d start: %d end: %d queued: %d sleep: %ds", task.ID, cursor, end, queuedJobs.Load(), batchDelaySec)
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(time.Duration(batchDelaySec) * time.Second):
-				}
-			}
 			debugf("开始批量拉取消息: cid: %d start: %d end: %d queued: %d", task.ID, cursor, end, queuedJobs.Load())
 			ms, err := client.GetMessages(task.ID, &telegram.SearchOption{IDs: ids})
 			if err != nil {
@@ -576,47 +568,35 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	go func() {
 		defer producerWG.Done()
 
-		if err := fetchNextJobs(); err != nil {
-			if ctx.Err() == nil {
-				log.Printf("初始化下载队列失败: cid: %d err: %v", task.ID, err)
-			}
-			if queuedJobs.Load() == 0 {
-				exhausted.Store(true)
-				closeJobs()
-			}
-			return
-		}
-
-		ticker := time.NewTicker(4 * time.Second)
-		defer ticker.Stop()
-
 		for {
+			if batchDelaySec > 0 {
+				debugf("下载队列生产者休眠: cid: %d queued: %d sleep: %ds", task.ID, queuedJobs.Load(), batchDelaySec)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Duration(batchDelaySec) * time.Second):
+				}
+			}
+
 			if exhausted.Load() {
 				if queuedJobs.Load() == 0 {
 					closeJobs()
 					return
+				}
+			} else {
+				queued := queuedJobs.Load()
+				if queued < refillThreshold {
+					debugf("下载队列低于阈值，准备补充: cid: %d queued: %d threshold: %d", task.ID, queued, refillThreshold)
+					if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
+						log.Printf("补充下载队列失败: cid: %d queued: %d err: %v", task.ID, queuedJobs.Load(), err)
+					}
 				}
 			}
 
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				if exhausted.Load() {
-					if queuedJobs.Load() == 0 {
-						closeJobs()
-						return
-					}
-					continue
-				}
-				queued := queuedJobs.Load()
-				if queued >= refillThreshold {
-					continue
-				}
-				debugf("下载队列低于阈值，准备补充: cid: %d queued: %d threshold: %d", task.ID, queued, refillThreshold)
-				if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
-					log.Printf("补充下载队列失败: cid: %d queued: %d err: %v", task.ID, queuedJobs.Load(), err)
-				}
+			default:
 			}
 		}
 	}()

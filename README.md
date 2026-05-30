@@ -213,7 +213,7 @@ download:
 - `download.concurrent`：同时执行的文件下载任务数，默认 `3`
 - `download.fileWorkers`：单个文件内部下载线程数；小于等于 0 时使用 `workers`
 - `download.batchSize`：每次批量拉取消息数量，默认 `100`
-- `download.batchDelay`：下载队列低于阈值并准备补充下一批消息前的等待时间，单位秒；小于等于 `0` 时不额外等待
+- `download.batchDelay`：下载队列生产者每轮循环的等待时间，单位秒；小于等于 `0` 时默认 `4`
 - `download.forceJoin`：账号无法访问频道时是否尝试自动加入
 - `download.channels`：需要下载的频道列表
 
