@@ -574,11 +574,11 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 			return
 		}
 
-		batchDelaySec := 4
+		batchDelaySec := 0
 		if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchDelay > 0 {
 			batchDelaySec = infos.Conf.Download.BatchDelay
 		}
-		ticker := time.NewTicker(time.Duration(batchDelaySec) * time.Second)
+		ticker := time.NewTicker(4 * time.Second)
 		defer ticker.Stop()
 
 		for {
@@ -600,9 +600,19 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 					}
 					continue
 				}
-				if queuedJobs.Load() >= refillThreshold {
+				queued := queuedJobs.Load()
+				if queued >= refillThreshold {
 					continue
 				}
+				if batchDelaySec > 0 {
+					debugf("下载队列补充前休眠: cid: %d queued: %d threshold: %d sleep: %ds", task.ID, queued, refillThreshold, batchDelaySec)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Duration(batchDelaySec) * time.Second):
+					}
+				}
+				debugf("开始补充下载队列: cid: %d queued: %d threshold: %d", task.ID, queuedJobs.Load(), refillThreshold)
 				if err := fetchNextJobs(); err != nil && ctx.Err() == nil {
 					log.Printf("补充下载队列失败: cid: %d queued: %d err: %v", task.ID, queuedJobs.Load(), err)
 				}
