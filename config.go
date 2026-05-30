@@ -47,6 +47,7 @@ type Download struct {
 	Concurrent          int               `yaml:"concurrent,omitempty"`   // 同时并发下载的频道数量限制, 0 表示不限制
 	FileWorkers         int               `yaml:"fileWorkers,omitempty"`  // 每个文件内部的并发分片数, 0 表示使用全局 workers
 	BatchSize           int               `yaml:"batchSize,omitempty"`    // 每次批量获取消息的大小，默认 100
+	BatchDelay          int               `yaml:"batchDelay,omitempty"`   // 下载队列补充检查间隔(秒), 默认 4
 	ScanInterval        int               `yaml:"scanInterval,omitempty"` // 定时扫描间隔(秒), 0 表示不配置（代码默认 300s）
 	ForceJoin           bool              `yaml:"forceJoin,omitempty"`    // 当账号未加入频道时尝试自动加入 (全局开关)
 	Rclone              Rclone            `yaml:"rclone,omitempty"`       // rclone 远端存在性检查配置
@@ -64,6 +65,7 @@ type downloadRaw struct {
 	Concurrent          int               `yaml:"concurrent,omitempty"`
 	FileWorkers         int               `yaml:"fileWorkers,omitempty"`
 	BatchSize           int               `yaml:"batchSize,omitempty"`
+	BatchDelay          int               `yaml:"batchDelay,omitempty"`
 	ScanInterval        int               `yaml:"scanInterval,omitempty"`
 	ForceJoin           bool              `yaml:"forceJoin,omitempty"`
 	Rclone              Rclone            `yaml:"rclone,omitempty"`
@@ -90,6 +92,7 @@ func (conf *Download) UnmarshalYAML(value *yaml.Node) error {
 		Concurrent:          raw.Concurrent,
 		FileWorkers:         raw.FileWorkers,
 		BatchSize:           raw.BatchSize,
+		BatchDelay:          raw.BatchDelay,
 		ScanInterval:        raw.ScanInterval,
 		ForceJoin:           raw.ForceJoin,
 		Rclone:              raw.Rclone,

@@ -40,6 +40,8 @@ download:
   fileWorkers: 4
   # 每次批量获取消息的大小，默认 100，可根据需要调整
   batchSize: 100
+  # 下载队列低于阈值时，检查并补充下一批消息的间隔(秒)，默认 4
+  batchDelay: 4
   rclone:
     enabled: false
     # configFile: C:/Users/Administrator/.config/rclone/rclone.conf

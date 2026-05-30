@@ -574,7 +574,11 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 			return
 		}
 
-		ticker := time.NewTicker(4 * time.Second)
+		batchDelaySec := 4
+		if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchDelay > 0 {
+			batchDelaySec = infos.Conf.Download.BatchDelay
+		}
+		ticker := time.NewTicker(time.Duration(batchDelaySec) * time.Second)
 		defer ticker.Stop()
 
 		for {
