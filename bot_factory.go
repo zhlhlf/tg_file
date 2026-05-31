@@ -63,7 +63,6 @@ func (infos *Infos) createBotsWithFirstUserBot(count int) ([]string, error) {
 			return createdTokens, fmt.Errorf("创建第 %d 个 bot 失败: %w", i+1, createErr)
 		}
 		createdTokens = append(createdTokens, token)
-		infos.appendBotToken(token)
 		log.Printf("已创建 Bot: username: @%s", username)
 		if i < count-1 {
 			debugf("创建 Bot 后休眠: sleep: 1m index: %d", i+1)
@@ -71,9 +70,6 @@ func (infos *Infos) createBotsWithFirstUserBot(count int) ([]string, error) {
 		}
 	}
 
-	if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
-		return createdTokens, fmt.Errorf("保存 botTokens 失败: %w", err)
-	}
 	debugf("批量创建 Bot 完成: count: %d", len(createdTokens))
 	return createdTokens, nil
 }
@@ -146,7 +142,6 @@ func (infos *Infos) collectAllBotTokensFromAllUsers() ([]string, error) {
 			}
 			unique[token] = struct{}{}
 			allTokens = append(allTokens, token)
-			infos.appendBotToken(token)
 		}
 		log.Printf("UserBot[%s] 获取完成，发现 token: %d", result.name, len(result.tokens))
 	}
