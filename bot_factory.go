@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -87,10 +88,38 @@ func (infos *Infos) collectAllBotTokensFromAllUsers() ([]string, error) {
 	if len(clients) == 0 {
 		return nil, fmt.Errorf("未找到可用 UserBot 客户端")
 	}
+	accountOrder := make([]string, 0, len(clients))
+	seenAccounts := make(map[string]struct{}, len(clients))
+	for idx, account := range infos.Conf.EffectiveDownloadUserBots() {
+		name := configuredUserClientKey(account, idx)
+		if _, ok := seenAccounts[name]; ok {
+			continue
+		}
+		if clients[name] == nil {
+			continue
+		}
+		seenAccounts[name] = struct{}{}
+		accountOrder = append(accountOrder, name)
+	}
+	if len(accountOrder) < len(clients) {
+		extraNames := make([]string, 0, len(clients)-len(accountOrder))
+		for name, client := range clients {
+			if client == nil {
+				continue
+			}
+			if _, ok := seenAccounts[name]; ok {
+				continue
+			}
+			extraNames = append(extraNames, name)
+		}
+		sort.Strings(extraNames)
+		accountOrder = append(accountOrder, extraNames...)
+	}
 
 	results := make(chan collectBotTokensResult, len(clients))
 	var wg sync.WaitGroup
-	for name, client := range clients {
+	for _, name := range accountOrder {
+		client := clients[name]
 		if client == nil {
 			continue
 		}
@@ -123,18 +152,25 @@ func (infos *Infos) collectAllBotTokensFromAllUsers() ([]string, error) {
 
 	unique := make(map[string]struct{})
 	allTokens := make([]string, 0, 16)
+	resultByName := make(map[string]collectBotTokensResult, len(clients))
 	successUsers := 0
 	failedUsers := 0
 	for result := range results {
 		if result.err != nil {
 			failedUsers++
 			debugf("UserBot[%s] 获取失败: %v", result.name, result.err)
-			if len(result.tokens) == 0 {
-				continue
-			}
 		}
 		if result.err == nil {
 			successUsers++
+		}
+		resultByName[result.name] = result
+		log.Printf("UserBot[%s] 获取完成，发现 token: %d", result.name, len(result.tokens))
+	}
+
+	for _, name := range accountOrder {
+		result, ok := resultByName[name]
+		if !ok {
+			continue
 		}
 		for _, token := range result.tokens {
 			if _, ok := unique[token]; ok {
@@ -143,7 +179,6 @@ func (infos *Infos) collectAllBotTokensFromAllUsers() ([]string, error) {
 			unique[token] = struct{}{}
 			allTokens = append(allTokens, token)
 		}
-		log.Printf("UserBot[%s] 获取完成，发现 token: %d", result.name, len(result.tokens))
 	}
 
 	if len(allTokens) == 0 {

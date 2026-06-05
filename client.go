@@ -199,53 +199,47 @@ func (infos *Infos) initUserClientsForDownloadOnly() error {
 	infos.Mutex.Unlock()
 
 	results := make([]userStartupResult, len(accounts))
-	var wg sync.WaitGroup
 	for idx, origAccount := range accounts {
-		wg.Add(1)
-		go func(idx int, origAccount UserBot) {
-			defer wg.Done()
-			account := origAccount
-			phone := strings.TrimSpace(account.Phone)
-			if phone != "" {
-				account.Name = sanitizeSessionName(phone)
-			} else {
-				account.Name = sanitizeSessionName(fmt.Sprintf("user%d", idx+1))
-			}
+		account := origAccount
+		phone := strings.TrimSpace(account.Phone)
+		if phone != "" {
+			account.Name = sanitizeSessionName(phone)
+		} else {
+			account.Name = sanitizeSessionName(fmt.Sprintf("user%d", idx+1))
+		}
 
-			client, err := telegram.NewClient(infos.userClientConf(account.Name, account.DC))
-			if err != nil {
-				results[idx] = userStartupResult{account: account, err: fmt.Errorf("创建 UserBot[%s] 失败: %w", account.Name, err)}
-				return
-			}
-			if err = client.Connect(); err != nil {
-				results[idx] = userStartupResult{account: account, err: fmt.Errorf("连接 UserBot[%s] 失败: %w", account.Name, err)}
-				return
-			}
+		client, err := telegram.NewClient(infos.userClientConf(account.Name, account.DC))
+		if err != nil {
+			results[idx] = userStartupResult{account: account, err: fmt.Errorf("创建 UserBot[%s] 失败: %w", account.Name, err)}
+			continue
+		}
+		if err = client.Connect(); err != nil {
+			results[idx] = userStartupResult{account: account, err: fmt.Errorf("连接 UserBot[%s] 失败: %w", account.Name, err)}
+			continue
+		}
 
-			me, meErr := client.GetMe()
+		me, meErr := client.GetMe()
+		if meErr != nil {
+			if strings.Contains(strings.ToUpper(meErr.Error()), "AUTH_KEY_UNREGISTERED") {
+				if err = infos.loginViaTerminal(client, account); err != nil {
+					results[idx] = userStartupResult{account: account, err: fmt.Errorf("UserBot[%s] 登录失败: %w", account.Name, err)}
+					continue
+				}
+				me, meErr = client.GetMe()
+			}
 			if meErr != nil {
-				if strings.Contains(strings.ToUpper(meErr.Error()), "AUTH_KEY_UNREGISTERED") {
-					if err = infos.loginViaTerminal(client, account); err != nil {
-						results[idx] = userStartupResult{account: account, err: fmt.Errorf("UserBot[%s] 登录失败: %w", account.Name, err)}
-						return
-					}
-					me, meErr = client.GetMe()
-				}
-				if meErr != nil {
-					results[idx] = userStartupResult{account: account, err: fmt.Errorf("获取 UserBot[%s] 信息失败: %w", account.Name, meErr)}
-					return
-				}
+				results[idx] = userStartupResult{account: account, err: fmt.Errorf("获取 UserBot[%s] 信息失败: %w", account.Name, meErr)}
+				continue
 			}
+		}
 
-			if account.UserID != 0 && me.ID != account.UserID {
-				results[idx] = userStartupResult{account: account, err: fmt.Errorf("UserBot[%s] 账号不匹配: 配置 %d, 实际 %d", account.Name, account.UserID, me.ID)}
-				return
-			}
+		if account.UserID != 0 && me.ID != account.UserID {
+			results[idx] = userStartupResult{account: account, err: fmt.Errorf("UserBot[%s] 账号不匹配: 配置 %d, 实际 %d", account.Name, account.UserID, me.ID)}
+			continue
+		}
 
-			results[idx] = userStartupResult{account: account, client: client, me: me}
-		}(idx, origAccount)
+		results[idx] = userStartupResult{account: account, client: client, me: me}
 	}
-	wg.Wait()
 
 	failCount := 0
 	for _, result := range results {
@@ -441,6 +435,7 @@ func (infos *Infos) startBot() (err error) {
 			case <-time.After(10 * time.Second):
 				close(timedOut)
 				results[idx].err = fmt.Errorf("Bot[%d] 初始化超过 10 秒，已跳过", idx+1)
+				warnf("Bot[%d] 初始化超时: session: %s timeout: 10s", idx+1, sessionName)
 				return
 			}
 		}(idx, token)
