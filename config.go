@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"           // 用于日志记录
 	"os"            // 用于文件操作
-	"path/filepath" // 用于处理文件路径
 	"strconv"
 	"strings"
 
@@ -48,6 +47,7 @@ type Download struct {
 	FileWorkers         int               `yaml:"fileWorkers,omitempty"`  // 每个文件内部的并发分片数, 0 表示使用全局 workers
 	BatchSize           int               `yaml:"batchSize,omitempty"`    // 每次批量获取消息的大小，默认 100
 	BatchDelay          int               `yaml:"batchDelay,omitempty"`   // 下载队列生产者循环等待时间(秒), 默认 4
+	FetchMode           string            `yaml:"fetchMode,omitempty"`    // 消息发现方式: auto|search|history|ids，默认 auto
 	ScanInterval        int               `yaml:"scanInterval,omitempty"` // 定时扫描间隔(秒), 0 表示不配置（代码默认 300s）
 	ForceJoin           bool              `yaml:"forceJoin,omitempty"`    // 当账号未加入频道时尝试自动加入 (全局开关)
 	Rclone              Rclone            `yaml:"rclone,omitempty"`       // rclone 远端存在性检查配置
@@ -66,6 +66,7 @@ type downloadRaw struct {
 	FileWorkers         int               `yaml:"fileWorkers,omitempty"`
 	BatchSize           int               `yaml:"batchSize,omitempty"`
 	BatchDelay          int               `yaml:"batchDelay,omitempty"`
+	FetchMode           string            `yaml:"fetchMode,omitempty"`
 	ScanInterval        int               `yaml:"scanInterval,omitempty"`
 	ForceJoin           bool              `yaml:"forceJoin,omitempty"`
 	Rclone              Rclone            `yaml:"rclone,omitempty"`
@@ -93,6 +94,7 @@ func (conf *Download) UnmarshalYAML(value *yaml.Node) error {
 		FileWorkers:         raw.FileWorkers,
 		BatchSize:           raw.BatchSize,
 		BatchDelay:          raw.BatchDelay,
+		FetchMode:           strings.TrimSpace(raw.FetchMode),
 		ScanInterval:        raw.ScanInterval,
 		ForceJoin:           raw.ForceJoin,
 		Rclone:              raw.Rclone,
@@ -506,20 +508,23 @@ func parseInt64Any(v any, field string) (int64, error) {
 	}
 }
 
-// loadConf 从指定路径加载 config.yaml 配置文件
+// loadConf 从指定配置文件路径加载 YAML 配置。
 // 如果文件不存在或解析失败, 将返回错误
-func loadConf(filesPath string) (*Conf, error) {
-	yamlPath := filepath.Join(filesPath, "config.yaml")
+func loadConf(configPath string) (*Conf, error) {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return nil, fmt.Errorf("配置文件路径为空")
+	}
 
-	bytes, err := os.ReadFile(yamlPath)
+	bytes, err := os.ReadFile(configPath)
 	if err != nil {
-		log.Printf("读取 config.yaml 文件错误: %+v", err)
+		log.Printf("读取配置文件错误: path=%s err=%+v", configPath, err)
 		return nil, err
 	}
 
 	var conf Conf
 	if err := yaml.Unmarshal(bytes, &conf); err != nil {
-		log.Printf("解析 config.yaml 文件错误: %+v", err)
+		log.Printf("解析配置文件错误: path=%s err=%+v", configPath, err)
 		return nil, err
 	}
 
@@ -527,23 +532,25 @@ func loadConf(filesPath string) (*Conf, error) {
 		conf.Download.OutputDir = "downloads"
 	}
 
-	return &conf, nil // 返回解析后的配置对象
+	return &conf, nil
 }
 
-// saveConf 将当前的配置信息序列化并保存到 config.yaml 文件中
+// saveConf 将当前配置保存到指定配置文件。
 // 常用于在程序运行过程中动态更新配置（如通过 Bot 命令添加白名单）
-func saveConf(conf *Conf, filesPath string) error {
-	configPath := filepath.Join(filesPath, "config.yaml")
+func saveConf(conf *Conf, configPath string) error {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return fmt.Errorf("配置文件路径为空")
+	}
 
 	bytes, err := yaml.Marshal(conf)
 	if err != nil {
-		log.Printf("序列化 config.yaml 文件错误: %+v", err)
+		log.Printf("序列化配置文件错误: path=%s err=%+v", configPath, err)
 		return err
 	}
 
-	// 将字节数组写入到配置文件并返回结果
 	if err := os.WriteFile(configPath, bytes, 0644); err != nil {
-		log.Printf("写入 config.yaml 文件错误: %+v", err)
+		log.Printf("写入配置文件错误: path=%s err=%+v", configPath, err)
 		return err
 	}
 	return nil

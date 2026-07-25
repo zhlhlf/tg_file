@@ -434,7 +434,9 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	}
 
 	typeFilter, allowAll := normalizeTypeFilter(infos.Conf.Download.GlobalTypes, task.Types)
-	log.Printf("频道开始下载: cid: %d from: %d latest: %d user: %s", task.ID, start, latest, accountName)
+	fetchMode := resolveMessageFetchMode(infos, typeFilter, allowAll)
+	searchFilters := buildMediaSearchFilters(typeFilter, allowAll)
+	log.Printf("频道开始下载: cid: %d from: %d latest: %d user: %s fetch: %s", task.ID, start, latest, accountName, fetchMode)
 
 	availableAccounts := infos.availableUserAccounts()
 	rrIdx := 0
@@ -443,6 +445,10 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	bs := 100
 	if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchSize > 0 {
 		bs = infos.Conf.Download.BatchSize
+	}
+	if bs > 100 {
+		// Telegram search/history 单次实用上限按 100 处理
+		bs = 100
 	}
 	batchSize := int32(bs)
 	workerCount := cap(sem)
@@ -472,12 +478,42 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	var closeJobsOnce sync.Once
 	var producerWG sync.WaitGroup
 	var workerWG sync.WaitGroup
-	nextCursor := start
+
+	// 拉取状态：search/history 用 offset 翻页；ids 用连续游标兜底
+	idsCursor := start
+	offsetID := int32(0)
+	filterIdx := 0
+	seenMsgIDs := make(map[int32]struct{}, 256)
+	minIDBound := start - 1
+	if start <= 1 {
+		minIDBound = 0
+	}
+	maxIDBound := latest + 1
+	if latest >= 2147483647 {
+		maxIDBound = latest
+	}
 
 	closeJobs := func() {
 		closeJobsOnce.Do(func() {
 			close(jobs)
 		})
+	}
+
+	markExhausted := func() {
+		exhausted.Store(true)
+		if queuedJobs.Load() == 0 {
+			closeJobs()
+		}
+	}
+
+	advanceSearchFilter := func() bool {
+		filterIdx++
+		offsetID = 0
+		if filterIdx >= len(searchFilters) {
+			return false
+		}
+		debugf("切换媒体搜索过滤器: cid: %d filterIndex: %d/%d", task.ID, filterIdx+1, len(searchFilters))
+		return true
 	}
 
 	go func() {
@@ -486,32 +522,131 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	}()
 
 	fetchNextJobs := func() error {
-		for nextCursor <= latest {
+		for {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
 			}
 
-			cursor := nextCursor
-			end := cursor + batchSize - 1
-			if end > latest {
-				end = latest
-			}
-			nextCursor = end + 1
+			var (
+				ms        []telegram.NewMessage
+				err       error
+				pageDesc  string
+				rawCount  int
+				oldestID  int32
+				hasOldest bool
+			)
 
-			ids := make([]int32, 0, end-cursor+1)
-			for mid := cursor; mid <= end; mid++ {
-				ids = append(ids, mid)
+			switch fetchMode {
+			case "ids":
+				if idsCursor > latest {
+					markExhausted()
+					return nil
+				}
+				cursor := idsCursor
+				end := cursor + batchSize - 1
+				if end > latest {
+					end = latest
+				}
+				idsCursor = end + 1
+				ids := make([]int32, 0, end-cursor+1)
+				for mid := cursor; mid <= end; mid++ {
+					ids = append(ids, mid)
+				}
+				pageDesc = fmt.Sprintf("ids[%d-%d]", cursor, end)
+				log.Printf("开始批量拉取消息: cid: %d mode: ids range: %d-%d queued: %d", task.ID, cursor, end, queuedJobs.Load())
+				ms, err = client.GetMessages(task.ID, &telegram.SearchOption{IDs: ids})
+				if err != nil {
+					log.Printf("批量获取消息失败: cid: %d mode: ids range: %d-%d err: %v", task.ID, cursor, end, err)
+					continue
+				}
+
+			case "history":
+				pageDesc = fmt.Sprintf("history(offset=%d min=%d max=%d)", offsetID, minIDBound, maxIDBound)
+				log.Printf("开始批量拉取消息: cid: %d mode: history offset: %d minID: %d maxID: %d queued: %d", task.ID, offsetID, minIDBound, maxIDBound, queuedJobs.Load())
+				ms, err = client.GetHistory(task.ID, &telegram.HistoryOption{
+					Limit:  batchSize,
+					Offset: offsetID,
+					MinID:  minIDBound,
+					MaxID:  maxIDBound,
+				})
+				if err != nil {
+					log.Printf("批量获取消息失败: cid: %d mode: history offset: %d err: %v", task.ID, offsetID, err)
+					log.Printf("历史拉取失败，回退到 ids 模式: cid: %d", task.ID)
+					fetchMode = "ids"
+					idsCursor = start
+					offsetID = 0
+					continue
+				}
+
+			default: // search
+				if len(searchFilters) == 0 {
+					log.Printf("search 模式无可用过滤器，切换到 history: cid: %d", task.ID)
+					fetchMode = "history"
+					offsetID = 0
+					continue
+				}
+				if filterIdx >= len(searchFilters) {
+					markExhausted()
+					return nil
+				}
+				filter := searchFilters[filterIdx]
+				pageDesc = fmt.Sprintf("search(filter=%s offset=%d min=%d max=%d)", mediaFilterName(filter), offsetID, minIDBound, maxIDBound)
+				log.Printf("开始批量拉取消息: cid: %d mode: search filter: %s offset: %d minID: %d maxID: %d queued: %d", task.ID, mediaFilterName(filter), offsetID, minIDBound, maxIDBound, queuedJobs.Load())
+				ms, err = client.GetMessages(task.ID, &telegram.SearchOption{
+					Query:  "",
+					Filter: filter,
+					Offset: offsetID,
+					Limit:  batchSize,
+					MinID:  minIDBound,
+					MaxID:  maxIDBound,
+				})
+				if err != nil {
+					log.Printf("批量获取消息失败: cid: %d mode: search filter: %s offset: %d err: %v", task.ID, mediaFilterName(filter), offsetID, err)
+					if advanceSearchFilter() {
+						continue
+					}
+					log.Printf("媒体搜索失败，回退到 history 模式: cid: %d", task.ID)
+					fetchMode = "history"
+					offsetID = 0
+					continue
+				}
 			}
 
-			debugf("开始批量拉取消息: cid: %d start: %d end: %d queued: %d", task.ID, cursor, end, queuedJobs.Load())
-			ms, err := client.GetMessages(task.ID, &telegram.SearchOption{IDs: ids})
-			if err != nil {
-				log.Printf("批量获取消息失败: cid: %d start: %d end: %d err: %v", task.ID, cursor, end, err)
-				continue
+			rawCount = len(ms)
+			for _, msg := range ms {
+				if !hasOldest || msg.ID < oldestID {
+					oldestID = msg.ID
+					hasOldest = true
+				}
 			}
-			if len(ms) == 0 {
+
+			// 更新翻页游标（search/history 都是 offset_id 语义：继续取更旧消息）
+			if fetchMode != "ids" {
+				if rawCount == 0 || !hasOldest {
+					if fetchMode == "search" {
+						if advanceSearchFilter() {
+							continue
+						}
+					}
+					markExhausted()
+					return nil
+				}
+				if offsetID > 0 && oldestID >= offsetID {
+					debugf("拉取游标无进展，结束当前过滤器: cid: %d mode: %s offset: %d oldest: %d", task.ID, fetchMode, offsetID, oldestID)
+					if fetchMode == "search" {
+						if advanceSearchFilter() {
+							continue
+						}
+					}
+					markExhausted()
+					return nil
+				}
+				offsetID = oldestID
+			}
+
+			if rawCount == 0 {
 				continue
 			}
 
@@ -520,6 +655,12 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 
 			enqueued := 0
 			for _, msg := range ms {
+				if msg.ID < start || msg.ID > latest {
+					continue
+				}
+				if _, seen := seenMsgIDs[msg.ID]; seen {
+					continue
+				}
 				if msg.File == nil || !msg.IsMedia() {
 					continue
 				}
@@ -537,6 +678,7 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 					continue
 				}
 
+				seenMsgIDs[msg.ID] = struct{}{}
 				fileAccount, fileClient := infos.selectFileDownloadClient(task, accountName, client, availableAccounts, &rrIdx)
 				wgFiles.Add(1)
 				queuedJobs.Add(1)
@@ -552,16 +694,42 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 				}
 			}
 
+			log.Printf("拉取分页完成: cid: %d page: %s raw: %d enqueued: %d queued: %d", task.ID, pageDesc, rawCount, enqueued, queuedJobs.Load())
+
+			// search/history 到达下界后，结束当前 filter
+			if fetchMode != "ids" && hasOldest && oldestID <= start {
+				if fetchMode == "search" {
+					if enqueued > 0 {
+						if !advanceSearchFilter() {
+							exhausted.Store(true)
+							if queuedJobs.Load() == 0 {
+								closeJobs()
+							}
+						}
+						return nil
+					}
+					if advanceSearchFilter() {
+						continue
+					}
+					markExhausted()
+					return nil
+				}
+				if enqueued > 0 {
+					exhausted.Store(true)
+					if queuedJobs.Load() == 0 {
+						closeJobs()
+					}
+					return nil
+				}
+				markExhausted()
+				return nil
+			}
+
 			if enqueued > 0 {
 				return nil
 			}
+			// 本页没有可下载媒体，继续拉下一页
 		}
-
-		exhausted.Store(true)
-		if queuedJobs.Load() == 0 {
-			closeJobs()
-		}
-		return nil
 	}
 
 	producerWG.Add(1)
@@ -867,6 +1035,73 @@ func (infos *Infos) logDownloadMemberships(ctx context.Context) {
 			}(accountName, task)
 		}
 		wg.Wait()
+	}
+}
+
+func resolveMessageFetchMode(infos *Infos, typeFilter map[string]struct{}, allowAll bool) string {
+	mode := "auto"
+	if infos != nil && infos.Conf != nil {
+		mode = strings.ToLower(strings.TrimSpace(infos.Conf.Download.FetchMode))
+	}
+	switch mode {
+	case "ids", "history", "search":
+		if mode == "search" && len(buildMediaSearchFilters(typeFilter, allowAll)) == 0 {
+			return "history"
+		}
+		return mode
+	default:
+		// auto: 有明确媒体类型时走 search，否则 history
+		if len(buildMediaSearchFilters(typeFilter, allowAll)) > 0 {
+			return "search"
+		}
+		return "history"
+	}
+}
+
+func buildMediaSearchFilters(typeFilter map[string]struct{}, allowAll bool) []telegram.MessagesFilter {
+	if allowAll || len(typeFilter) == 0 {
+		return nil
+	}
+	_, wantVideo := typeFilter["video"]
+	_, wantPhoto := typeFilter["photo"]
+	_, wantDoc := typeFilter["document"]
+
+	filters := make([]telegram.MessagesFilter, 0, 3)
+	// photo+video 可合并为一次 PhotoVideo 搜索，减少 RPC
+	if wantVideo && wantPhoto {
+		filters = append(filters, &telegram.InputMessagesFilterPhotoVideo{})
+		wantVideo = false
+		wantPhoto = false
+	}
+	if wantVideo {
+		filters = append(filters, &telegram.InputMessagesFilterVideo{})
+	}
+	if wantPhoto {
+		filters = append(filters, &telegram.InputMessagesFilterPhotos{})
+	}
+	if wantDoc {
+		filters = append(filters, &telegram.InputMessagesFilterDocument{})
+	}
+	return filters
+}
+
+func mediaFilterName(filter telegram.MessagesFilter) string {
+	if filter == nil {
+		return "nil"
+	}
+	switch filter.(type) {
+	case *telegram.InputMessagesFilterVideo:
+		return "video"
+	case *telegram.InputMessagesFilterPhotos:
+		return "photos"
+	case *telegram.InputMessagesFilterPhotoVideo:
+		return "photo_video"
+	case *telegram.InputMessagesFilterDocument:
+		return "document"
+	case *telegram.InputMessagesFilterEmpty:
+		return "empty"
+	default:
+		return fmt.Sprintf("%T", filter)
 	}
 }
 

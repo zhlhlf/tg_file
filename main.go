@@ -76,7 +76,8 @@ type Infos struct {
 	Conf            *Conf                          // 指向全局配置
 	File            *os.File                       // 日志文件句柄
 	Rex             *regexp.Regexp                 // 用于解析 Telegram FloodWait 错误的正则
-	FilesPath       string                         // 配置文件存放目录
+	FilesPath       string                         // 数据目录（session、tmp 等）
+	ConfigPath      string                         // 配置文件完整路径（可由 -c 指定）
 	FilePath        string                         // 日志文件路径
 	BotID           int64                          // 主 Bot 自身的 ID
 	BotIDs          map[int64]struct{}             // 所有 Bot 自身 ID
@@ -126,7 +127,9 @@ func main() {
 	log.SetFlags(0)
 	startTime = time.Now()
 	// 解析命令行参数
-	files := flag.String("files", "files", "配置文件所属目录路径（包含 config.yaml, session 等）")
+	files := flag.String("files", "files", "数据目录路径（包含 session、tmp 等，默认也在此目录查找配置）")
+	configFlag := flag.String("c", "", "配置文件路径（相对 -files 目录或绝对路径），例如 -c asd.yaml")
+	flag.StringVar(configFlag, "config", "", "同 -c，指定配置文件路径")
 	file := flag.String("log", "", "日志文件的存放路径")
 	var ver bool
 	flag.BoolVar(&ver, "version", false, "显示程序版本号并退出")
@@ -141,7 +144,9 @@ func main() {
 	}
 
 	// 1. 初始化全局 Infos 对象并加载配置
-	value, err := newInfos(*file, *files)
+	configPath := resolveConfigPath(*files, *configFlag)
+	log.Printf("使用配置文件: %s", configPath)
+	value, err := newInfos(*file, *files, configPath)
 	if err != nil {
 		log.Printf("初始化失败: %+v", err)
 		return
@@ -318,12 +323,41 @@ func main() {
 	sendMS(nil, "程序已退出 by jczhl", nil, 60)
 }
 
+// resolveConfigPath 解析配置文件路径。
+// -c/--config 为空时使用 files 目录下的 config.yaml；
+// 绝对路径直接使用；
+// 仅文件名（如 asd.yaml）时放到 -files 目录下；
+// 带目录的相对路径（如 files/asd.yaml）按当前工作目录解析，避免 files/files 重复拼接。
+func resolveConfigPath(filesPath, configFlag string) string {
+	filesPath = strings.TrimSpace(filesPath)
+	if filesPath == "" {
+		filesPath = "files"
+	}
+	filesPath = filepath.Clean(filesPath)
+	configFlag = strings.TrimSpace(configFlag)
+	if configFlag == "" {
+		return filepath.Join(filesPath, "config.yaml")
+	}
+	if filepath.IsAbs(configFlag) {
+		return filepath.Clean(configFlag)
+	}
+
+	cleaned := filepath.Clean(configFlag)
+	// 已包含目录分量：按 cwd 相对路径处理（支持 -c files/asd.yaml）
+	if filepath.Dir(cleaned) != "." {
+		return cleaned
+	}
+	// 仅文件名：放到 -files 目录下（支持 -c asd.yaml）
+	return filepath.Join(filesPath, cleaned)
+}
+
 // newInfos 初始化全局 Infos 对象, 加载日志和配置
-func newInfos(filePath, filesPath string) (*Infos, error) {
+func newInfos(filePath, filesPath, configPath string) (*Infos, error) {
 	mutex := new(sync.RWMutex)
 	infos := &Infos{
 		FilePath:        filePath,
 		FilesPath:       filesPath,
+		ConfigPath:      configPath,
 		Mutex:           mutex,
 		Cond:            sync.NewCond(mutex),
 		Code:            make(chan string, 1),
@@ -355,7 +389,7 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 	}
 
 	// 加载配置文件
-	conf, err := loadConf(filesPath)
+	conf, err := loadConf(configPath)
 	if err != nil {
 		log.Fatalf("载入配置文件失败: %+v", err)
 	}

@@ -10,6 +10,7 @@ TGFileBot 是一个基于 Go 的 Telegram 频道媒体自动下载工具。它�
 - 支持通过频道链接自动解析频道 ID
 - 支持账号未加入频道时自动尝试加入
 - 支持按媒体类型过滤：`video`、`photo`、`document`、`all`
+- 支持 `fetchMode`：`auto`/`search`/`history`/`ids`，默认按类型用 search 发现媒体，避免连续 ID 空扫
 - 支持按文件名关键词跳过下载
 - 支持下载停滞检测，临时文件 20 秒无变化会取消并交由上层重试
 - 支持下载完成后的文件大小校验
@@ -82,7 +83,8 @@ go run . -files files
 
 ## 启动参数
 
-- `-files`：配置目录，默认 `files`
+- `-files`：数据目录，默认 `files`（session、tmp 等）
+- `-c` / `-config`：配置文件路径；仅文件名时相对 `-files`（如 `-c asd.yaml`→`files/asd.yaml`），带目录时相对当前目录（如 `-c files/asd.yaml`），默认 `config.yaml`
 - `-log`：日志文件路径，不传则只输出到终端
 - `-version` / `-v`：输出版本号并退出
 
@@ -90,6 +92,8 @@ go run . -files files
 
 ```powershell
 .\tgfilebot.exe -files files -log files\run.log
+.\tgfilebot.exe -files files -c asd.yaml
+.\tgfilebot.exe -files files -config D:\configs\prod.yaml
 ```
 
 ## 运行模式

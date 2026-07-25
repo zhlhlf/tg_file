@@ -114,7 +114,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 				}
 				infos.IDs[whiteID] = value
 				infos.Conf.WhiteIDs = append(infos.Conf.WhiteIDs, whiteID)
-				if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+				if err := saveConf(infos.Conf, infos.ConfigPath); err != nil {
 					log.Printf("保存配置文件失败: %+v", err)
 				}
 				infos.Mutex.Unlock()
@@ -139,7 +139,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 					infos.Conf.WhiteIDs = slices.DeleteFunc(infos.Conf.WhiteIDs, func(num int64) bool {
 						return num == whiteID
 					})
-					if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+					if err := saveConf(infos.Conf, infos.ConfigPath); err != nil {
 						log.Printf("保存配置文件失败: %+v", err)
 					}
 					infos.Mutex.Unlock()
@@ -245,7 +245,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			}
 			infos.Mutex.Lock()
 			infos.Conf.DC = value
-			if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			if err := saveConf(infos.Conf, infos.ConfigPath); err != nil {
 				log.Printf("保存配置文件失败: %+v", err)
 			}
 			infos.Mutex.Unlock()
@@ -275,7 +275,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			}
 			infos.Mutex.Lock()
 			infos.Conf.Proxy = content
-			if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			if err := saveConf(infos.Conf, infos.ConfigPath); err != nil {
 				log.Printf("保存配置文件失败: %+v", err)
 			}
 			infos.Mutex.Unlock()
@@ -302,7 +302,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			}
 			infos.Mutex.Lock()
 			infos.Conf.Workers = num
-			if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			if err := saveConf(infos.Conf, infos.ConfigPath); err != nil {
 				log.Printf("保存配置文件失败: %+v", err)
 			}
 			infos.Mutex.Unlock()
