@@ -441,14 +441,10 @@ func (infos *Infos) downloadChannelRange(ctx context.Context, client *telegram.C
 	availableAccounts := infos.availableUserAccounts()
 	rrIdx := 0
 	var relayIdx uint64
-	// batchSize 可从配置覆盖，默认 100
+	// batchSize 可从配置覆盖，默认 100；不设硬上限，按配置值使用
 	bs := 100
 	if infos != nil && infos.Conf != nil && infos.Conf.Download.BatchSize > 0 {
 		bs = infos.Conf.Download.BatchSize
-	}
-	if bs > 100 {
-		// Telegram search/history 单次实用上限按 100 处理
-		bs = 100
 	}
 	batchSize := int32(bs)
 	workerCount := cap(sem)

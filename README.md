@@ -216,7 +216,7 @@ download:
 - `download.maxSize`：全局文件大小上限，`0` 或不配置表示不限制；支持纯字节数或 `KB` / `MB` / `GB` / `TB`
 - `download.concurrent`：同时执行的文件下载任务数，默认 `3`
 - `download.fileWorkers`：单个文件内部下载线程数；小于等于 0 时使用 `workers`
-- `download.batchSize`：每次批量拉取消息数量，默认 `100`
+- `download.batchSize`：每次批量拉取消息数量，默认 `100`；不设上限，按配置值作为 Limit/ID 窗口使用
 - `download.batchDelay`：下载队列生产者每轮循环的等待时间，单位秒；小于等于 `0` 时默认 `4`
 - `download.forceJoin`：账号无法访问频道时是否尝试自动加入
 - `download.channels`：需要下载的频道列表
